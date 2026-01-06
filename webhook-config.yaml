@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Config
+
+clusters:
+- cluster:
+    server: http://authnwebhook:8080/authenticate
+  name: remote-authn
+
+users:
+- name: apiserver
+
+current-context: webhook
+contexts:
+- context:
+    cluster: remote-authn
+    user: apiserver
+  name: webhook

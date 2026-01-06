@@ -1,0 +1,19 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+- role: control-plane
+  extraMounts:
+  - hostPath: ./
+    containerPath: /files
+  kubeadmConfigPatches:
+  - |
+    kind: ClusterConfiguration
+    apiServer:
+        extraArgs:
+          authentication-token-webhook-config-file: /files/webhook-config.yaml
+          authentication-token-webhook-version: v1
+        extraVolumes:
+          - name: authn-webhook-files
+            hostPath: "/files"
+            mountPath: "/files"
+            readOnly: true
