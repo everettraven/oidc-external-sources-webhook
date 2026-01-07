@@ -4,7 +4,7 @@ based on commit https://github.com/kubernetes/kubernetes/commit/d71e7e785957ac21
 
 Any and all commits that modify this file will be documented below.
 
-- {commit TBD} - Remapping imports to copied packages
+- c267cdf3b5845917e04a89fa3ed881774115726e - Remapping imports to copied packages
 
 */
 
