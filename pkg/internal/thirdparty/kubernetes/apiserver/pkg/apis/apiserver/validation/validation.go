@@ -5,6 +5,7 @@ based on commit https://github.com/kubernetes/kubernetes/commit/d71e7e785957ac21
 Any and all commits that modify this file will be documented below.
 
 - c267cdf3b5845917e04a89fa3ed881774115726e - Remapping imports to copied packages
+- {commit TBD} - Remove unnecessary types
 
 */
 
@@ -30,17 +31,12 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"os"
-	"path/filepath"
 	"strings"
-	"time"
 
 	celgo "github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/operators"
 	exprpb "google.golang.org/genproto/googleapis/api/expr/v1alpha1"
 
-	v1 "k8s.io/api/authorization/v1"
-	"k8s.io/api/authorization/v1beta1"
 	"k8s.io/apimachinery/pkg/util/sets"
 	utilvalidation "k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -86,15 +82,6 @@ func ValidateAuthenticationConfiguration(compiler authenticationcel.Compiler, c 
 				allErrs = append(allErrs, field.Duplicate(fldPath.Child("issuer").Child("discoveryURL"), a.Issuer.DiscoveryURL))
 			}
 			seenDiscoveryURLs.Insert(a.Issuer.DiscoveryURL)
-		}
-	}
-
-	if c.Anonymous != nil {
-		if !utilfeature.DefaultFeatureGate.Enabled(features.AnonymousAuthConfigurableEndpoints) {
-			allErrs = append(allErrs, field.Forbidden(field.NewPath("anonymous"), "anonymous is not supported when AnonymousAuthConfigurableEndpoints feature gate is disabled"))
-		}
-		if !c.Anonymous.Enabled && len(c.Anonymous.Conditions) > 0 {
-			allErrs = append(allErrs, field.Invalid(field.NewPath("anonymous", "conditions"), c.Anonymous.Conditions, "enabled should be set to true when conditions are defined"))
 		}
 	}
 
@@ -653,188 +640,6 @@ func compileUserCELExpression(compiler authenticationcel.Compiler, expression au
 		return nil, convertCELErrorToValidationError(fldPath, expression.GetExpression(), err)
 	}
 	return &compilationResult, nil
-}
-
-// ValidateAuthorizationConfiguration validates a given AuthorizationConfiguration.
-func ValidateAuthorizationConfiguration(compiler authorizationcel.Compiler, fldPath *field.Path, c *api.AuthorizationConfiguration, knownTypes sets.Set[string], repeatableTypes sets.Set[string]) field.ErrorList {
-	allErrs := field.ErrorList{}
-
-	if len(c.Authorizers) == 0 {
-		allErrs = append(allErrs, field.Required(fldPath.Child("authorizers"), "at least one authorization mode must be defined"))
-	}
-
-	seenAuthorizerTypes := sets.NewString()
-	seenAuthorizerNames := sets.NewString()
-	for i, a := range c.Authorizers {
-		fldPath := fldPath.Child("authorizers").Index(i)
-		aType := string(a.Type)
-		if aType == "" {
-			allErrs = append(allErrs, field.Required(fldPath.Child("type"), ""))
-			continue
-		}
-		if !knownTypes.Has(aType) {
-			allErrs = append(allErrs, field.NotSupported(fldPath.Child("type"), aType, sets.List(knownTypes)))
-			continue
-		}
-		if seenAuthorizerTypes.Has(aType) && !repeatableTypes.Has(aType) {
-			allErrs = append(allErrs, field.Duplicate(fldPath.Child("type"), aType))
-			continue
-		}
-		seenAuthorizerTypes.Insert(aType)
-
-		if len(a.Name) == 0 {
-			allErrs = append(allErrs, field.Required(fldPath.Child("name"), ""))
-		} else if seenAuthorizerNames.Has(a.Name) {
-			allErrs = append(allErrs, field.Duplicate(fldPath.Child("name"), a.Name))
-		} else if errs := utilvalidation.IsDNS1123Subdomain(a.Name); len(errs) != 0 {
-			allErrs = append(allErrs, field.Invalid(fldPath.Child("name"), a.Name, fmt.Sprintf("authorizer name is invalid: %s", strings.Join(errs, ", "))))
-		}
-		seenAuthorizerNames.Insert(a.Name)
-
-		switch a.Type {
-		case api.TypeWebhook:
-			if a.Webhook == nil {
-				allErrs = append(allErrs, field.Required(fldPath.Child("webhook"), "required when type=Webhook"))
-				continue
-			}
-			allErrs = append(allErrs, ValidateWebhookConfiguration(compiler, fldPath, a.Webhook)...)
-		default:
-			if a.Webhook != nil {
-				allErrs = append(allErrs, field.Invalid(fldPath.Child("webhook"), "non-null", "may only be specified when type=Webhook"))
-			}
-		}
-	}
-
-	return allErrs
-}
-
-func ValidateWebhookConfiguration(compiler authorizationcel.Compiler, fldPath *field.Path, c *api.WebhookConfiguration) field.ErrorList {
-	allErrs := field.ErrorList{}
-
-	if c.Timeout.Duration == 0 {
-		allErrs = append(allErrs, field.Required(fldPath.Child("timeout"), ""))
-	} else if c.Timeout.Duration > 30*time.Second || c.Timeout.Duration < 0 {
-		allErrs = append(allErrs, field.Invalid(fldPath.Child("timeout"), c.Timeout.Duration.String(), "must be > 0s and <= 30s"))
-	}
-
-	if c.AuthorizedTTL.Duration == 0 {
-		allErrs = append(allErrs, field.Required(fldPath.Child("authorizedTTL"), ""))
-	} else if c.AuthorizedTTL.Duration < 0 {
-		allErrs = append(allErrs, field.Invalid(fldPath.Child("authorizedTTL"), c.AuthorizedTTL.Duration.String(), "must be > 0s"))
-	}
-
-	if c.UnauthorizedTTL.Duration == 0 {
-		allErrs = append(allErrs, field.Required(fldPath.Child("unauthorizedTTL"), ""))
-	} else if c.UnauthorizedTTL.Duration < 0 {
-		allErrs = append(allErrs, field.Invalid(fldPath.Child("unauthorizedTTL"), c.UnauthorizedTTL.Duration.String(), "must be > 0s"))
-	}
-
-	switch c.SubjectAccessReviewVersion {
-	case "":
-		allErrs = append(allErrs, field.Required(fldPath.Child("subjectAccessReviewVersion"), ""))
-	case "v1":
-		_ = &v1.SubjectAccessReview{}
-	case "v1beta1":
-		_ = &v1beta1.SubjectAccessReview{}
-	default:
-		allErrs = append(allErrs, field.NotSupported(fldPath.Child("subjectAccessReviewVersion"), c.SubjectAccessReviewVersion, []string{"v1", "v1beta1"}))
-	}
-
-	switch c.MatchConditionSubjectAccessReviewVersion {
-	case "":
-		if len(c.MatchConditions) > 0 {
-			allErrs = append(allErrs, field.Required(fldPath.Child("matchConditionSubjectAccessReviewVersion"), "required if match conditions are specified"))
-		}
-	case "v1":
-		_ = &v1.SubjectAccessReview{}
-	default:
-		allErrs = append(allErrs, field.NotSupported(fldPath.Child("matchConditionSubjectAccessReviewVersion"), c.MatchConditionSubjectAccessReviewVersion, []string{"v1"}))
-	}
-
-	switch c.FailurePolicy {
-	case "":
-		allErrs = append(allErrs, field.Required(fldPath.Child("failurePolicy"), ""))
-	case api.FailurePolicyNoOpinion, api.FailurePolicyDeny:
-	default:
-		allErrs = append(allErrs, field.NotSupported(fldPath.Child("failurePolicy"), c.FailurePolicy, []string{"NoOpinion", "Deny"}))
-	}
-
-	switch c.ConnectionInfo.Type {
-	case "":
-		allErrs = append(allErrs, field.Required(fldPath.Child("connectionInfo", "type"), ""))
-	case api.AuthorizationWebhookConnectionInfoTypeInCluster:
-		if c.ConnectionInfo.KubeConfigFile != nil {
-			allErrs = append(allErrs, field.Invalid(fldPath.Child("connectionInfo", "kubeConfigFile"), *c.ConnectionInfo.KubeConfigFile, "can only be set when type=KubeConfigFile"))
-		}
-	case api.AuthorizationWebhookConnectionInfoTypeKubeConfigFile:
-		if c.ConnectionInfo.KubeConfigFile == nil || *c.ConnectionInfo.KubeConfigFile == "" {
-			allErrs = append(allErrs, field.Required(fldPath.Child("connectionInfo", "kubeConfigFile"), ""))
-		} else if !filepath.IsAbs(*c.ConnectionInfo.KubeConfigFile) {
-			allErrs = append(allErrs, field.Invalid(fldPath.Child("connectionInfo", "kubeConfigFile"), *c.ConnectionInfo.KubeConfigFile, "must be an absolute path"))
-		} else if info, err := os.Stat(*c.ConnectionInfo.KubeConfigFile); err != nil {
-			allErrs = append(allErrs, field.Invalid(fldPath.Child("connectionInfo", "kubeConfigFile"), *c.ConnectionInfo.KubeConfigFile, fmt.Sprintf("error loading file: %v", err)))
-		} else if !info.Mode().IsRegular() {
-			allErrs = append(allErrs, field.Invalid(fldPath.Child("connectionInfo", "kubeConfigFile"), *c.ConnectionInfo.KubeConfigFile, "must be a regular file"))
-		}
-	default:
-		allErrs = append(allErrs, field.NotSupported(fldPath.Child("connectionInfo", "type"), c.ConnectionInfo, []string{api.AuthorizationWebhookConnectionInfoTypeInCluster, api.AuthorizationWebhookConnectionInfoTypeKubeConfigFile}))
-	}
-
-	_, errs := compileMatchConditions(compiler, c.MatchConditions, fldPath, utilfeature.DefaultFeatureGate.Enabled(features.StructuredAuthorizationConfiguration))
-	allErrs = append(allErrs, errs...)
-
-	return allErrs
-}
-
-// ValidateAndCompileMatchConditions validates a given webhook's matchConditions.
-// This is exported for use in authz package.
-func ValidateAndCompileMatchConditions(compiler authorizationcel.Compiler, matchConditions []api.WebhookMatchCondition) (*authorizationcel.CELMatcher, field.ErrorList) {
-	return compileMatchConditions(compiler, matchConditions, nil, utilfeature.DefaultFeatureGate.Enabled(features.StructuredAuthorizationConfiguration))
-}
-
-func compileMatchConditions(compiler authorizationcel.Compiler, matchConditions []api.WebhookMatchCondition, fldPath *field.Path, structuredAuthzFeatureEnabled bool) (*authorizationcel.CELMatcher, field.ErrorList) {
-	var allErrs field.ErrorList
-	// should fail when match conditions are used without feature enabled
-	if len(matchConditions) > 0 && !structuredAuthzFeatureEnabled {
-		allErrs = append(allErrs, field.Invalid(fldPath.Child("matchConditions"), "", "not supported when StructuredAuthorizationConfiguration feature gate is disabled"))
-	}
-	if len(matchConditions) > 64 {
-		allErrs = append(allErrs, field.TooMany(fldPath.Child("matchConditions"), len(matchConditions), 64))
-		return nil, allErrs
-	}
-
-	seenExpressions := sets.NewString()
-	var compilationResults []authorizationcel.CompilationResult
-	var usesFieldSelector, usesLabelSelector bool
-
-	for i, condition := range matchConditions {
-		fldPath := fldPath.Child("matchConditions").Index(i).Child("expression")
-		if len(strings.TrimSpace(condition.Expression)) == 0 {
-			allErrs = append(allErrs, field.Required(fldPath, ""))
-			continue
-		}
-		if seenExpressions.Has(condition.Expression) {
-			allErrs = append(allErrs, field.Duplicate(fldPath, condition.Expression))
-			continue
-		}
-		seenExpressions.Insert(condition.Expression)
-		compilationResult, err := compileMatchConditionsExpression(fldPath, compiler, condition.Expression)
-		if err != nil {
-			allErrs = append(allErrs, err)
-			continue
-		}
-		compilationResults = append(compilationResults, compilationResult)
-		usesFieldSelector = usesFieldSelector || compilationResult.UsesFieldSelector
-		usesLabelSelector = usesLabelSelector || compilationResult.UsesLabelSelector
-	}
-	if len(compilationResults) == 0 {
-		return nil, allErrs
-	}
-	return &authorizationcel.CELMatcher{
-		CompilationResults: compilationResults,
-		UsesFieldSelector:  usesFieldSelector,
-		UsesLabelSelector:  usesLabelSelector,
-	}, allErrs
 }
 
 func compileMatchConditionsExpression(fldPath *field.Path, compiler authorizationcel.Compiler, expression string) (authorizationcel.CompilationResult, *field.Error) {
