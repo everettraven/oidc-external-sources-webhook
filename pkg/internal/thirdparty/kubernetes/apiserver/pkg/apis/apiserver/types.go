@@ -4,7 +4,7 @@ based on commit https://github.com/kubernetes/kubernetes/commit/b69fd9d42c4d03b8
 
 Any and all commits that modify this file will be documented below.
 
-- {commit TBD} - Remove unnecessary types
+- a08cd482bf5e4b2d593337e471963b1cb37004b0 - Remove unnecessary types
 */
 
 /*

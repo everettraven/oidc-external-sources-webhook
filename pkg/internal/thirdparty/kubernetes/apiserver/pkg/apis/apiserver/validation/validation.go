@@ -5,7 +5,7 @@ based on commit https://github.com/kubernetes/kubernetes/commit/d71e7e785957ac21
 Any and all commits that modify this file will be documented below.
 
 - c267cdf3b5845917e04a89fa3ed881774115726e - Remapping imports to copied packages
-- {commit TBD} - Remove unnecessary types
+- a08cd482bf5e4b2d593337e471963b1cb37004b0 - Remove unnecessary types
 
 */
 
