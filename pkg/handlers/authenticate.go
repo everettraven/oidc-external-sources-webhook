@@ -48,12 +48,17 @@ func (a *Authenticate) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 
 	resp, _, err := a.authenticator.AuthenticateToken(req.Context(), requestedTokenReview.Spec.Token)
 	if err != nil {
+		log.Println(err)
 		responseTokenReview.Status = authenticationv1.TokenReviewStatus{
 			Authenticated: false,
 			Error:         err.Error(),
 		}
 		rw.WriteHeader(http.StatusUnauthorized)
 	} else {
+		if resp == nil || resp.User == nil {
+			rw.WriteHeader(http.StatusUnauthorized)
+			return
+		}
 		extras := map[string]authenticationv1.ExtraValue{}
 
 		for key, values := range resp.User.GetExtra() {

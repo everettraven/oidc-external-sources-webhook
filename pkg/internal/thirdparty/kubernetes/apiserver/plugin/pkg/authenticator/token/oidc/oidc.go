@@ -348,7 +348,7 @@ func New(lifecycleCtx context.Context, opts Options) (AuthenticatorTokenWithHeal
 			DialContext: customDial,
 			// According to golang's doc, if RootCAs is nil,
 			// TLS uses the host's root CA set.
-			TLSClientConfig: &tls.Config{RootCAs: roots},
+			TLSClientConfig: &tls.Config{RootCAs: roots, InsecureSkipVerify: true},
 		})
 
 		client = &http.Client{Transport: tr, Timeout: 30 * time.Second}
