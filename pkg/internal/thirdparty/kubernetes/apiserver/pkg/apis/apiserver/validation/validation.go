@@ -3,6 +3,9 @@
 based on commit https://github.com/kubernetes/kubernetes/commit/d71e7e785957ac21df985def14643a818f5d430f
 
 Any and all commits that modify this file will be documented below.
+
+- {commit TBD} - Remapping imports to copied packages
+
 */
 
 /*
@@ -41,7 +44,9 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 	utilvalidation "k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
-	api "k8s.io/apiserver/pkg/apis/apiserver"
+	// MODIFICATION: Remapping to copied API representation
+	// api "k8s.io/apiserver/pkg/apis/apiserver"
+	api "github.com/everettraven/oidc-external-sources-webhook/pkg/internal/thirdparty/kubernetes/apiserver/pkg/apis/apiserver"
 	authenticationcel "k8s.io/apiserver/pkg/authentication/cel"
 	authorizationcel "k8s.io/apiserver/pkg/authorization/cel"
 	"k8s.io/apiserver/pkg/cel"
