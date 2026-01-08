@@ -4,5 +4,5 @@ COPY . .
 
 RUN go build -o webhook main.go
 
-ENTRYPOINT [ "./webhook" ]
+ENTRYPOINT [ "./webhook", "run" ]
 
