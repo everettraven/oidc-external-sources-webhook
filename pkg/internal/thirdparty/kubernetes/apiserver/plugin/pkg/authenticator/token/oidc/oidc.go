@@ -228,6 +228,10 @@ type jwtAuthenticator struct {
 	requiredClaims map[string]string
 
 	healthCheck atomic.Pointer[errorHolder]
+
+	// MODIFICATION: an external claims source resolver is
+	// used to resolve claims from configured external sources
+	externalSourceResolver *externalClaimsResolver
 }
 
 // idTokenVerifier is a wrapper around oidc.IDTokenVerifier. It uses the oidc.IDTokenVerifier
