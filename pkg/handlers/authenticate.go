@@ -56,6 +56,7 @@ func (a *Authenticate) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		rw.WriteHeader(http.StatusUnauthorized)
 	} else {
 		if resp == nil || resp.User == nil {
+			log.Println("(authenticate.ServeHTTP) no response or user. Unauthorized.")
 			rw.WriteHeader(http.StatusUnauthorized)
 			return
 		}

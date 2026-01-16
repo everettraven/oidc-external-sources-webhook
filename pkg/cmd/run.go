@@ -18,7 +18,7 @@ func NewRunCommand() *cobra.Command {
 			go func() {
 				err := jwt.Run(cmd.Context())
 				if err != nil {
-					log.Println("jwt.Run error", err)
+					log.Fatalf("jwt.Run error", err)
 				}
 			}()
 

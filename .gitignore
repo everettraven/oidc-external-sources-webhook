@@ -1,2 +1,2 @@
 *.pem
-keycloak-config.json
+keycloak-config.yaml
