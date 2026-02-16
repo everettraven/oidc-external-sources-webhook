@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/everettraven/oidc-external-sources-webhook/pkg/internal/thirdparty/kubernetes/apiserver/pkg/apis/apiserver"
 	apiserverv1 "github.com/everettraven/oidc-external-sources-webhook/pkg/internal/thirdparty/kubernetes/apiserver/pkg/apis/apiserver/v1"
@@ -13,6 +14,7 @@ import (
 	"k8s.io/apiserver/pkg/authentication/authenticator"
 	"k8s.io/apiserver/pkg/authentication/token/union"
 	"k8s.io/apiserver/pkg/server/dynamiccertificates"
+	"k8s.io/kubernetes/pkg/util/filesystem"
 	"sigs.k8s.io/yaml"
 
 	authenticationcel "k8s.io/apiserver/pkg/authentication/cel"
@@ -25,6 +27,7 @@ func NewJWT() *JWT {
 type JWT struct {
 	configFile string
 	delegate   authenticator.Token
+	cancel     context.CancelFunc
 }
 
 func (j *JWT) AddFlags(fs *pflag.FlagSet) {
@@ -36,10 +39,31 @@ func (j *JWT) AuthenticateToken(ctx context.Context, token string) (*authenticat
 }
 
 func (j *JWT) Run(ctx context.Context) error {
+	// validations
 	if j.configFile == "" {
 		return fmt.Errorf("configuration file must be specified for jwt authentication")
 	}
 
+	// initial setup
+	if err := j.SetDelegateFromConfigFile(ctx); err != nil {
+		return fmt.Errorf("configuring token authenticator: %w", err)
+	}
+
+	go filesystem.WatchUntil(ctx, time.Minute, j.configFile, func() {
+		err := j.SetDelegateFromConfigFile(ctx)
+		if err != nil {
+			fmt.Println("error reloading configuration", err)
+		}
+	}, func(err error) {
+		if err != nil {
+			fmt.Println("error watching configuration", err)
+		}
+	})
+
+	return nil
+}
+
+func (j *JWT) SetDelegateFromConfigFile(ctx context.Context) error {
 	authnConfig, err := AuthenticationConfigurationFromConfigurationFile(j.configFile)
 	if err != nil {
 		return fmt.Errorf("loading configuration: %w", err)
@@ -58,18 +82,25 @@ func (j *JWT) Run(ctx context.Context) error {
 		return fmt.Errorf("validating authentication configuration: %w", err)
 	}
 
-	tokenAuthenticator, err := TokenAuthenticatorForAuthenticationConfiguration(ctx, out)
+	wrappedCtx, cancel := context.WithCancel(ctx)
+	tokenAuthenticator, err := TokenAuthenticatorForAuthenticationConfiguration(wrappedCtx, out)
 	if err != nil {
+		defer cancel()
 		return fmt.Errorf("creating token authenticator: %w", err)
 	}
 
+
+	if j.delegate != nil {
+		j.cancel()
+	}
+
+	j.cancel = cancel
 	j.delegate = tokenAuthenticator
 
 	return nil
 }
 
 func AuthenticationConfigurationFromConfigurationFile(cfgPath string) (*apiserverv1.AuthenticationConfiguration, error) {
-	// TODO: hot-reload of configuration. For now, just load once on startup.
 	configBytes, err := os.ReadFile(cfgPath)
 	if err != nil {
 		return nil, fmt.Errorf("reading configuration file: %w", err)
