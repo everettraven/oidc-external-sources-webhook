@@ -77,6 +77,16 @@ type JWTAuthenticator struct {
 	// The validation rules are logically ANDed together and must all return true for the validation to pass.
 	// +optional
 	UserValidationRules []UserValidationRule `json:"userValidationRules,omitempty"`
+
+	// MODIFICATION: Add a field for external claims sourcing configuration
+	
+	// externalClaimsSource contains configuration options for sourcing claims
+	// from sources external to the token.
+	// This allows for claims not present in the token, but available from some
+	// other endpoint on the issuer to be fetched and used during the identity
+	// mapping process.
+	// +optional
+	ExternalClaimsSource *ExternalClaimsSource `json:"externalClaimsSource,omitempty"`
 }
 
 // Issuer provides the configuration for an external provider's specific settings.
@@ -376,3 +386,44 @@ type UserValidationRule struct {
 	Message string `json:"message,omitempty"`
 }
 
+
+// MODIFICATIONS: New types for external claims sourcing.
+//
+// TODO: finish implementing the JSON tags and comments here.
+//
+// TODO: Add validations for these types/fields.
+
+type ExternalClaimsSource struct {
+	Authentication Authentication
+	TLS            TLS
+	Sources        []ClaimsSource
+}
+
+type TLS struct {
+	CA string
+}
+
+type Authentication struct {
+	Type AuthenticationType
+}
+
+type AuthenticationType string
+
+const (
+	AuthenticationTypeRequestProvidedToken AuthenticationType = "RequestProvidedToken"
+)
+
+type ClaimsSource struct {
+	URL      SourceURL
+	Mappings []SourcedClaimMapping
+}
+
+type SourceURL struct {
+	Base           string
+	PathExpression string
+}
+
+type SourcedClaimMapping struct {
+	Name       string
+	Expression string
+}

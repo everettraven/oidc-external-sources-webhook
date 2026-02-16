@@ -430,6 +430,15 @@ func New(lifecycleCtx context.Context, opts Options) (AuthenticatorTokenWithHeal
 		err: fmt.Errorf("oidc: authenticator for issuer %q is not initialized", authn.jwtAuthenticator.Issuer.URL),
 	})
 
+	if opts.JWTAuthenticator.ExternalClaimsSource != nil {
+		externalSourceResolver, err := NewExternalClaimsResolver(*opts.JWTAuthenticator.ExternalClaimsSource, compiler)
+		if err != nil {
+			return nil, err
+		}
+
+		authn.externalSourceResolver = externalSourceResolver
+	}
+
 	issuerURL := opts.JWTAuthenticator.Issuer.URL
 	if opts.KeySet != nil {
 		// We already have a key set, synchronously initialize the verifier.
