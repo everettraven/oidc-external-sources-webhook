@@ -41,7 +41,7 @@ openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -sha256 -days 3
 2. Run Keycloak with self-signed certificate
 
 ```sh
-podman run --name keycloak -p 127.0.0.1:8080:8443 --network=kind \
+podman run --rm --name keycloak -p 127.0.0.1:8080:8443 --network=kind \
         -e KC_BOOTSTRAP_ADMIN_USERNAME=admin -e KC_BOOTSTRAP_ADMIN_PASSWORD=change_me \
         -e KC_HTTPS_CERTIFICATE_FILE=/certs/cert.pem -e KC_HTTPS_CERTIFICATE_KEY_FILE=/certs/key.pem \
         -v $(pwd)/cert.pem:/certs/cert.pem -v $(pwd)/key.pem:/certs/key.pem\
@@ -58,28 +58,31 @@ podman run --name keycloak -p 127.0.0.1:8080:8443 --network=kind \
 
 ### Run the webhook container on the `kind` network
 
-1. Create the configuration file:
+1. Create the configuration file. An example:
 
-```json
-{
-    "issuer": {
-        "url": "https://keycloak:8443/realms/{realm}",
-        "audiences": [
-            "account"
-        ],
-        "certificateAuthority": "{cert.pem contents}"
-    },
-    "claimMappings": {
-        "username": {
-            "claim": "preferred_username",
-            "prefix": ""
-        }
-    }
-}
+```yaml
+apiVersion: everettraven.github.io/v1alpha1
+kind: AuthenticationConfiguration
+jwt:
+  - issuer:
+      url: https://keycloak:8443/realms/k8s
+      audiences:
+        - k8s-client
+      certificateAuthority: |
+          -----BEGIN CERTIFICATE-----
+          <certificate data, omitted to avoid security scan issues>
+          -----END CERTIFICATE-----
+    claimMappings:
+      username:
+       claim: "preferred_username"
+       prefix: ""
+      groups:
+        claim: "groups"
+        prefix: ""
 ```
 
 ```sh
-podman run --rm --name authnwebhook -d --network=kind -v $(pwd)/keycloak-config.json:/cfg/keycloak-config.json {tag} -- --config=/cfg/keycloak-config.json
+podman run --rm --name authnwebhook -d --network=kind -v $(pwd)/keycloak-config.yaml:/cfg/keycloak-config.yaml {tag} --config=/cfg/keycloak-config.yaml
 ```
 
 ### Create the KinD cluster
@@ -95,7 +98,7 @@ kind create cluster --config kind-config.yaml
 curl -k --data "grant_type=password&client_id={CLIENT_ID}&client_secret={CLIENT_SECRET}&username={USERNAME}&password={PASSWORD}" https://127.0.0.1:8080/realms/{realm}/protocol/openid-connect/token
 ```
 
-2. Update `kubeconfig` with new token-based context using the fetched token
+2. Update `kubeconfig` with new token-based context using the fetched token. As an example:
 
 ```yaml
 apiVersion: v1
@@ -112,4 +115,23 @@ users:
 - name: token-user
   user:
     token: {token}
+```
+
+### Make a request against the cluster
+
+Now that everything is configured, you should be able to make a request to the
+cluster and see that the token you received from Keycloak is mapped
+to a cluster identity.
+
+```sh
+kubectl auth whoami
+```
+
+Output should look something like:
+
+```sh
+ATTRIBUTE                                           VALUE
+Username                                            bpalmer
+Groups                                              [openshift openshift-auth system:authenticated]
+Extra: authentication.kubernetes.io/credential-id   [JTI=onrtro:81c6b4a1-0a37-fbcd-fe68-5cce2832ed91]
 ```
