@@ -37,6 +37,11 @@ func Convert_v1_JWTAuthenticator_To_apiserver_JWTAuthenticator(in *JWTAuthentica
 
 	out.ClaimValidationRules = *(*[]apiserver.ClaimValidationRule)(unsafe.Pointer(&in.ClaimValidationRules))
 	out.UserValidationRules = *(*[]apiserver.UserValidationRule)(unsafe.Pointer(&in.UserValidationRules))
+	
+	err = Convert_v1_ExternalClaimsSource_To_apiserver_ExternalClaimsSource(&in.ExternalClaimsSource, &out.ExternalClaimsSource)
+	if err != nil {
+		return fmt.Errorf("converting external claims source: %w", err)
+	}
 
 	return nil
 }
@@ -79,3 +84,44 @@ func Convert_v1_Issuer_To_apiserver_Issuer(in *Issuer, out *apiserver.Issuer) er
 	out.EgressSelectorType = apiserver.EgressSelectorType(in.EgressSelectorType)
 	return nil
 }
+
+func Convert_v1_ExternalClaimsSource_To_apiserver_ExternalClaimsSource(in *ExternalClaimsSource, out *apiserver.ExternalClaimsSource) error {
+	if in == nil {
+		in = &ExternalClaimsSource{}
+	}
+	if out == nil {
+		out = &apiserver.ExternalClaimsSource{}
+	}
+	if err := Convert_v1_Authentication_To_apiserver_Authentication(&in.Authentication, &out.Authentication); err != nil {
+		return err
+	}
+
+	if err := Convert_v1_TLS_To_apiserver_TLS(in.TLS, &out.TLS); err != nil {
+		return err
+	}
+
+	out.Sources = *(*[]apiserver.ClaimsSource)(unsafe.Pointer(&in.Sources))
+
+	return nil
+}
+
+func Convert_v1_Authentication_To_apiserver_Authentication(in *Authentication, out *apiserver.Authentication) error {
+	if out == nil {
+		out = &apiserver.Authentication{}
+	}
+
+	// defaulting?
+	if in == nil {
+		out.Type = apiserver.AuthenticationTypeRequestProvidedToken
+		return nil
+	}
+
+	out.Type = apiserver.AuthenticationType(in.Type)
+	return nil
+}
+
+func Convert_v1_TLS_To_apiserver_TLS(in *TLS, out *apiserver.TLS) error {
+	out.CA = in.CA
+	return nil
+}
+

@@ -46,7 +46,7 @@ type JWTAuthenticator struct {
 	UserValidationRules  []UserValidationRule
 
 	// MODIFICATION: Add a field for external claims sourcing configuration
-	ExternalClaimsSource *ExternalClaimsSource
+	ExternalClaimsSource ExternalClaimsSource
 }
 
 // Issuer provides the configuration for an external provider's specific settings.

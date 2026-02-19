@@ -18,6 +18,8 @@ import (
 	"sigs.k8s.io/yaml"
 
 	authenticationcel "k8s.io/apiserver/pkg/authentication/cel"
+	forkedauthenticationcel "github.com/everettraven/oidc-external-sources-webhook/pkg/internal/thirdparty/kubernetes/apiserver/pkg/authentication/cel"
+
 )
 
 func NewJWT() *JWT {
@@ -76,14 +78,14 @@ func (j *JWT) SetDelegateFromConfigFile(ctx context.Context) error {
 		return fmt.Errorf("converting external representation to internal representation: %w", err)
 	}
 
-	compiler := authenticationcel.NewDefaultCompiler()
+	compiler := forkedauthenticationcel.NewDefaultCompiler()
 	fieldErrs := validation.ValidateAuthenticationConfiguration(compiler, out, nil)
 	if err := fieldErrs.ToAggregate(); err != nil {
 		return fmt.Errorf("validating authentication configuration: %w", err)
 	}
 
 	wrappedCtx, cancel := context.WithCancel(ctx)
-	tokenAuthenticator, err := TokenAuthenticatorForAuthenticationConfiguration(wrappedCtx, out)
+	tokenAuthenticator, err := TokenAuthenticatorForAuthenticationConfiguration(wrappedCtx, out, compiler)
 	if err != nil {
 		defer cancel()
 		return fmt.Errorf("creating token authenticator: %w", err)
@@ -115,7 +117,7 @@ func AuthenticationConfigurationFromConfigurationFile(cfgPath string) (*apiserve
 	return config, nil
 }
 
-func TokenAuthenticatorForAuthenticationConfiguration(ctx context.Context, cfg *apiserver.AuthenticationConfiguration) (authenticator.Token, error) {
+func TokenAuthenticatorForAuthenticationConfiguration(ctx context.Context, cfg *apiserver.AuthenticationConfiguration, compiler authenticationcel.Compiler) (authenticator.Token, error) {
 	jwtAuthenticators := []authenticator.Token{}
 
 	for _, jwt := range cfg.JWT {
@@ -127,6 +129,7 @@ func TokenAuthenticatorForAuthenticationConfiguration(ctx context.Context, cfg *
 		tokenAuthenticator, err := oidc.New(ctx, oidc.Options{
 			JWTAuthenticator:  jwt,
 			CAContentProvider: caContentProvider,
+			Compiler: compiler,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("creating token authenticator: %w", err)

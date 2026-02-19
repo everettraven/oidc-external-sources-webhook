@@ -63,6 +63,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/net"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/wait"
+
 	// MODIFICATION: Remapping to copied API representation
 	// "k8s.io/apiserver/pkg/apis/apiserver"
 	"github.com/everettraven/oidc-external-sources-webhook/pkg/internal/thirdparty/kubernetes/apiserver/pkg/apis/apiserver"
@@ -82,11 +83,9 @@ import (
 	"k8s.io/klog/v2"
 )
 
-var (
-	// synchronizeTokenIDVerifierForTest should be set to true to force a
-	// wait until the token ID verifiers are ready.
-	synchronizeTokenIDVerifierForTest = false
-)
+// synchronizeTokenIDVerifierForTest should be set to true to force a
+// wait until the token ID verifiers are ready.
+var synchronizeTokenIDVerifierForTest = false
 
 const (
 	wellKnownEndpointPath = "/.well-known/openid-configuration"
@@ -430,8 +429,8 @@ func New(lifecycleCtx context.Context, opts Options) (AuthenticatorTokenWithHeal
 		err: fmt.Errorf("oidc: authenticator for issuer %q is not initialized", authn.jwtAuthenticator.Issuer.URL),
 	})
 
-	if opts.JWTAuthenticator.ExternalClaimsSource != nil {
-		externalSourceResolver, err := NewExternalClaimsResolver(*opts.JWTAuthenticator.ExternalClaimsSource, compiler)
+	if len(opts.JWTAuthenticator.ExternalClaimsSource.Sources) > 0 {
+		externalSourceResolver, err := NewExternalClaimsResolver(opts.JWTAuthenticator.ExternalClaimsSource, compiler)
 		if err != nil {
 			return nil, err
 		}
@@ -909,6 +908,12 @@ func (a *jwtAuthenticator) AuthenticateToken(ctx context.Context, token string) 
 		}
 	}
 
+	if a.externalSourceResolver != nil {
+		if err := a.externalSourceResolver.expand(ctx, token, c); err != nil {
+			return nil, false, fmt.Errorf("oidc: could not expand external claims: %v", err)
+		}
+	}
+
 	var claimsValue *lazy.MapValue
 	// Convert the claims to traits.Mapper so that we can evaluate the CEL expressions
 	// against the claims. This is done once here so that we don't have to convert
@@ -1086,6 +1091,9 @@ func (a *jwtAuthenticator) getGroups(ctx context.Context, c claims, claimsValue 
 	if err != nil {
 		return nil, fmt.Errorf("oidc: error evaluating group claim expression: %w", err)
 	}
+
+	fmt.Println(evalResult.EvalResult.Type())
+	fmt.Println(evalResult.EvalResult.Value())
 
 	groups, err := convertCELValueToStringList(evalResult.EvalResult)
 	if err != nil {
@@ -1273,6 +1281,8 @@ func convertCELValueToStringList(val ref.Val) ([]string, error) {
 				}
 				result = append(result, out)
 			}
+		case []string:
+			result = val.Value().([]string)
 		case []ref.Val:
 			for _, v := range val.Value().([]ref.Val) {
 				out, ok := v.Value().(string)

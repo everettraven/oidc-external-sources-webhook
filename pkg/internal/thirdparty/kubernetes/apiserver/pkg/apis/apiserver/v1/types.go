@@ -79,14 +79,14 @@ type JWTAuthenticator struct {
 	UserValidationRules []UserValidationRule `json:"userValidationRules,omitempty"`
 
 	// MODIFICATION: Add a field for external claims sourcing configuration
-	
+
 	// externalClaimsSource contains configuration options for sourcing claims
 	// from sources external to the token.
 	// This allows for claims not present in the token, but available from some
 	// other endpoint on the issuer to be fetched and used during the identity
 	// mapping process.
 	// +optional
-	ExternalClaimsSource *ExternalClaimsSource `json:"externalClaimsSource,omitempty"`
+	ExternalClaimsSource ExternalClaimsSource `json:"externalClaimsSource,omitempty"`
 }
 
 // Issuer provides the configuration for an external provider's specific settings.
@@ -386,25 +386,44 @@ type UserValidationRule struct {
 	Message string `json:"message,omitempty"`
 }
 
-
 // MODIFICATIONS: New types for external claims sourcing.
-//
-// TODO: finish implementing the JSON tags and comments here.
 //
 // TODO: Add validations for these types/fields.
 
 type ExternalClaimsSource struct {
-	Authentication Authentication
-	TLS            TLS
-	Sources        []ClaimsSource
+	// authentication is a required field that configures how the
+	// kube-apiserver authenticates with an external claims source.
+	// +required
+	Authentication Authentication `json:"authentication,omitzero"`
+	// tls is an optional field that configures the http client TLS
+	// settings when fetching external claims from this source.
+	// +optional
+	TLS *TLS `json:"tls,omitempty"`
+	// sources is a required list of the sources in which to fetch an
+	// external claim from.
+	// +required
+	Sources []ClaimsSource `json:"sources,omitempty"`
 }
 
 type TLS struct {
-	CA string
+	// ca is a required field that configures the certificate authority
+	// used to validate TLS connections with the external claims source.
+	// +required
+	CA string `json:"ca,omitempty"`
 }
 
 type Authentication struct {
-	Type AuthenticationType
+	// type is a required field that sets the type of
+	// authentication method used by the authenticator
+	// when fetching external claims.
+	//
+	// Allowed values are 'RequestProvidedToken'.
+	//
+	// When set to 'RequestProvidedToken', the authenticator will
+	// use the token provided to the kube-apiserver as part of the
+	// request to authenticate with the external claims source.
+	// +required
+	Type AuthenticationType `json:"type,omitempty"`
 }
 
 type AuthenticationType string
@@ -414,16 +433,42 @@ const (
 )
 
 type ClaimsSource struct {
-	URL      SourceURL
-	Mappings []SourcedClaimMapping
+	// url is a required configuration of the URL
+	// for which the external claims are located.
+	// +required
+	URL      SourceURL `json:"url,omitzero"`
+	// mappings is a required list of the claim
+	// and response handling expression pairs
+	// that produces the claims from the external source.
+	// +required
+	Mappings []SourcedClaimMapping `json:"mappings,omitempty"`
 }
 
 type SourceURL struct {
-	Base           string
-	PathExpression string
+	// base is a required base URL for which the external claims are located.
+	// It must use the HTTPS scheme and must only specify the hostname.
+	// +required
+	Base           string `json:"base,omitempty"`
+	// pathExpression is a required CEL expression that returns a list
+	// of string values used to construct the URL path.
+	// Claims from the token used for the request to the kube-apiserver
+	// are made available via the `claims` variable.
+	// +required
+	PathExpression string `json:"pathExpression,omitempty"`
 }
 
 type SourcedClaimMapping struct {
-	Name       string
-	Expression string
+	// name is a required name of the claim that
+	// will be produced and made available during
+	// the claim-to-identity mapping process.
+	// +required
+	Name       string `json:"name,omitempty"`
+
+	// expression is a required CEL expression that
+	// will produce a value to be assigned to the claim.
+	// The full response body from the request to the
+	// external claim source is provided via the
+	// `response` variable.
+	// +required
+	Expression string `json:"expression,omitempty"`
 }

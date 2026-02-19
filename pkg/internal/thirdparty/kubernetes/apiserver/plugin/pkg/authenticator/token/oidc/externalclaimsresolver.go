@@ -9,16 +9,29 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 
 	"github.com/everettraven/oidc-external-sources-webhook/pkg/internal/thirdparty/kubernetes/apiserver/pkg/apis/apiserver"
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
+	"github.com/google/cel-go/common/types/ref"
 	"github.com/google/cel-go/common/types/traits"
 	"github.com/google/cel-go/interpreter"
 	authenticationcel "k8s.io/apiserver/pkg/authentication/cel"
 )
 
+type ExternalClaimsCompatibleCompiler interface {
+	CompileExternalSourceExpression(expressionAccessor authenticationcel.ExpressionAccessor) (authenticationcel.CompilationResult, error)
+}
+
 func NewExternalClaimsResolver(externalClaimSource apiserver.ExternalClaimsSource, compiler authenticationcel.Compiler) (*externalClaimsResolver, error) {
+	// TODO: realistically, this case should never happen - I'm just trying to fork less code for PoC
+	// purposes. The _correct_ approach here is to also fork the interfaces for the authenticationcel.Compiler.
+	externalClaimsCompiler, ok := compiler.(ExternalClaimsCompatibleCompiler)
+	if !ok {
+		return nil, fmt.Errorf("incompatible compiler implementation")
+	}
+
 	out := &externalClaimsResolver{}
 
 	out.clientAuthentication = clientAuthenticationForAuthentication(externalClaimSource.Authentication)
@@ -26,8 +39,6 @@ func NewExternalClaimsResolver(externalClaimSource apiserver.ExternalClaimsSourc
 	out.tls = TLS{
 		certificateAuthority: externalClaimSource.TLS.CA,
 	}
-
-	claims := []externalClaim{}
 
 	for _, source := range externalClaimSource.Sources {
 
@@ -41,7 +52,7 @@ func NewExternalClaimsResolver(externalClaimSource apiserver.ExternalClaimsSourc
 		mappings := make(map[string]ExternalSourceResponseMapper)
 
 		for _, mapping := range source.Mappings {
-			mappingExpressionCompiled, err := compiler.CompileClaimsExpression(&authenticationcel.ClaimMappingExpression{
+			mappingExpressionCompiled, err := externalClaimsCompiler.CompileExternalSourceExpression(&authenticationcel.ClaimMappingExpression{
 				Expression: mapping.Expression,
 			})
 			if err != nil {
@@ -64,8 +75,6 @@ func NewExternalClaimsResolver(externalClaimSource apiserver.ExternalClaimsSourc
 		}
 		out.claims = append(out.claims, ec)
 	}
-
-	out.claims = claims
 
 	return out, nil
 }
@@ -146,7 +155,9 @@ func (ecr *externalClaimsResolver) expand(ctx context.Context, token string, c c
 			return fmt.Errorf("oidc: error during external claims resolution: building external claims request: %w", err)
 		}
 
-		req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+		if accessToken != "" {
+			req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+		}
 
 		client := http.DefaultClient
 
@@ -157,6 +168,9 @@ func (ecr *externalClaimsResolver) expand(ctx context.Context, token string, c c
 				Transport: &http.Transport{
 					TLSClientConfig: &tls.Config{
 						ClientCAs: certPool,
+						// TODO: remove. temporary to resolve:
+						// certificate relies on legacy Common Name field, use SANs instead
+						InsecureSkipVerify: true,
 					},
 				},
 			}
@@ -166,8 +180,18 @@ func (ecr *externalClaimsResolver) expand(ctx context.Context, token string, c c
 		if err != nil {
 			return fmt.Errorf("oidc: error during external claims resolution: performing external claims request: %w", err)
 		}
+		if resp == nil {
+			return errors.New("no response?")
+		}
+		if resp.StatusCode != http.StatusOK {
+			responseBody, _ := io.ReadAll(resp.Body)
+			return fmt.Errorf("oidc: received non-200 response code when fetching external claims: %d - %s", resp.StatusCode, string(responseBody))
+		}
 
 		externalClaims, err := claim.getClaimsFromResponse(ctx, resp)
+		for k,v := range externalClaims {
+			fmt.Println("key", k, "value", string(v))
+		}
 		if err != nil {
 			return fmt.Errorf("oidc: error during external claims resolution: getting claims from response: %w", err)
 		}
@@ -202,11 +226,37 @@ func (ec *externalClaim) getURLWithClaims(ctx context.Context, c claims) (string
 		return "", fmt.Errorf("oidc: error evaluating path expression: %w", err)
 	}
 
-	if evaluationResults.EvalResult.Type() != cel.StringType {
-		return "", fmt.Errorf("oidc: error evaluating path expression: %w", fmt.Errorf("path expression must return a string"))
+	if evaluationResults.EvalResult.Type().TypeName() != cel.ListType(cel.DynType).TypeName() {
+		return "", fmt.Errorf("oidc: error evaluating path expression: %w", fmt.Errorf("path expression must return a list, but got %v", evaluationResults.EvalResult.Type()))
 	}
 
-	path := evaluationResults.EvalResult.Value().(string)
+	// TODO: optimize
+	pathSegmentsVal := evaluationResults.EvalResult.Value()
+
+	refVals, ok := pathSegmentsVal.([]ref.Val)
+	if !ok {
+		return "", fmt.Errorf("could not convert output type %T to list of values", pathSegmentsVal)
+	}
+
+	pathSegments := []string{}
+
+	for _, val := range refVals {
+		str, ok := val.Value().(string)
+		if !ok {
+			return "", fmt.Errorf("could not convert list element type %T to string", val.Value())
+		}
+
+		pathSegments = append(pathSegments, str)
+	}
+
+	path := ""
+	for _, pathSegment := range pathSegments {
+		var err error
+		path, err = url.JoinPath(path, url.PathEscape(pathSegment))
+		if err != nil {
+			return "", fmt.Errorf("oidc: error building url path: %w", err)
+		}
+	}
 
 	urlStr := fmt.Sprintf("%s/%s", ec.celMapper.URL.Base, path)
 
@@ -234,11 +284,12 @@ func (ec *externalClaim) getClaimsFromResponse(ctx context.Context, resp *http.R
 			return nil, fmt.Errorf("error evaluating external claim mapping %q: %w", claim, err)
 		}
 
+		// TODO: The output may not be a string. Just allow any value? Only allow a subset of return types? Actually only allow a single string?
 		if evalResult.EvalResult.Type() != cel.StringType {
 			return nil, fmt.Errorf("error evaluating external claim mapping %q: %w", claim, errors.New("expected a string return type"))
 		}
 
-		externalClaims[claim] = json.RawMessage(evalResult.EvalResult.Value().(string))
+		externalClaims[claim] = json.RawMessage(fmt.Sprintf("%q", evalResult.EvalResult.Value().(string)))
 	}
 
 	return externalClaims, nil
