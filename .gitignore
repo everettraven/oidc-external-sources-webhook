@@ -1,2 +1,3 @@
 *.pem
 keycloak-config.yaml
+./bin/*
