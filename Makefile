@@ -3,6 +3,12 @@ CONTAINER_RUNTIME ?= "podman"
 .PHONY: up
 up: keycloak-certificate keycloak generate-config webhook cluster token
 
+.PHONY: down
+down:
+	${CONTAINER_RUNTIME} stop ${KEYCLOAK_CONTAINER_NAME} || true
+	${CONTAINER_RUNTIME} stop ${WEBHOOK_CONTAINER_NAME} || true
+	kind delete cluster
+
 KEYCLOAK_IMAGE ?= "quay.io/keycloak/keycloak:latest"
 KEYCLOAK_CONTAINER_NAME ?= "keycloak"
 KEYCLOAK_ADMIN_USERNAME ?= "admin"
