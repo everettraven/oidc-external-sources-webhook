@@ -1,3 +1,4 @@
-*.pem
 keycloak-config.yaml
-./bin/*
+bin
+certs
+cfg
