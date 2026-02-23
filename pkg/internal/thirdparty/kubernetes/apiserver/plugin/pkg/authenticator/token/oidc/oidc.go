@@ -71,7 +71,7 @@ import (
 	// apiservervalidation "k8s.io/apiserver/pkg/apis/apiserver/validation"
 	apiservervalidation "github.com/everettraven/oidc-external-sources-webhook/pkg/internal/thirdparty/kubernetes/apiserver/pkg/apis/apiserver/validation"
 	"k8s.io/apiserver/pkg/authentication/authenticator"
-	authenticationcel "k8s.io/apiserver/pkg/authentication/cel"
+	authenticationcel "github.com/everettraven/oidc-external-sources-webhook/pkg/internal/thirdparty/kubernetes/apiserver/pkg/authentication/cel"
 	authenticationtokenjwt "k8s.io/apiserver/pkg/authentication/token/jwt"
 	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/apiserver/pkg/cel"

@@ -12,12 +12,12 @@ import (
 	"net/url"
 
 	"github.com/everettraven/oidc-external-sources-webhook/pkg/internal/thirdparty/kubernetes/apiserver/pkg/apis/apiserver"
+	authenticationcel "github.com/everettraven/oidc-external-sources-webhook/pkg/internal/thirdparty/kubernetes/apiserver/pkg/authentication/cel"
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
 	"github.com/google/cel-go/common/types/traits"
 	"github.com/google/cel-go/interpreter"
-	authenticationcel "k8s.io/apiserver/pkg/authentication/cel"
 )
 
 type ExternalClaimsCompatibleCompiler interface {
@@ -25,13 +25,6 @@ type ExternalClaimsCompatibleCompiler interface {
 }
 
 func NewExternalClaimsResolver(externalClaimSource apiserver.ExternalClaimsSource, compiler authenticationcel.Compiler) (*externalClaimsResolver, error) {
-	// TODO: realistically, this case should never happen - I'm just trying to fork less code for PoC
-	// purposes. The _correct_ approach here is to also fork the interfaces for the authenticationcel.Compiler.
-	externalClaimsCompiler, ok := compiler.(ExternalClaimsCompatibleCompiler)
-	if !ok {
-		return nil, fmt.Errorf("incompatible compiler implementation")
-	}
-
 	out := &externalClaimsResolver{}
 
 	out.clientAuthentication = clientAuthenticationForAuthentication(externalClaimSource.Authentication)
@@ -41,36 +34,32 @@ func NewExternalClaimsResolver(externalClaimSource apiserver.ExternalClaimsSourc
 	}
 
 	for _, source := range externalClaimSource.Sources {
-
-		pathExpressionCompiled, err := compiler.CompileClaimsExpression(&authenticationcel.ClaimMappingExpression{
-			Expression: source.URL.PathExpression,
+		pathExpressionCompiled, err := compiler.CompileClaimsExpression(&authenticationcel.ExternalSourceURLExpression{
+			Hostname:       source.URL.Base,
+			PathExpression: source.URL.PathExpression,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("compiling path expression %q: %w", source.URL.PathExpression, err)
 		}
 
-		mappings := make(map[string]ExternalSourceResponseMapper)
-
+		sourceCompilationResults := []authenticationcel.CompilationResult{}
 		for _, mapping := range source.Mappings {
-			mappingExpressionCompiled, err := externalClaimsCompiler.CompileExternalSourceExpression(&authenticationcel.ClaimMappingExpression{
+			mappingExpressionCompiled, err := compiler.CompileExternalSourceExpression(&authenticationcel.ExternalSourceMappingExpression{
+				Claim:      mapping.Name,
 				Expression: mapping.Expression,
 			})
 			if err != nil {
-				return nil, fmt.Errorf("compiling mapping expression %q: %w", mapping.Expression, err)
+				return nil, fmt.Errorf("compiling mapping expression %q (%q): %w", mapping.Expression, mapping.Name, err)
 			}
 
-			mappings[mapping.Name] = &mapper{
-				result: mappingExpressionCompiled,
-			}
+			sourceCompilationResults = append(sourceCompilationResults, mappingExpressionCompiled)
 		}
 
 		ec := externalClaim{
-			celMapper: externalClaimCELMapper{
-				URL: urlCELMapper{
-					Base:           source.URL.Base,
-					PathExpression: authenticationcel.NewClaimsMapper([]authenticationcel.CompilationResult{pathExpressionCompiled}),
-				},
-				Mappings: mappings,
+			celMapper: authenticationcel.ExternalSourceCELMapper{
+				URL: authenticationcel.NewClaimsMapper([]authenticationcel.CompilationResult{pathExpressionCompiled}),
+				// TODO: Conditions
+				Sources: authenticationcel.NewExternalSourcesMapper(sourceCompilationResults),
 			},
 		}
 		out.claims = append(out.claims, ec)
@@ -189,7 +178,7 @@ func (ecr *externalClaimsResolver) expand(ctx context.Context, token string, c c
 		}
 
 		externalClaims, err := claim.getClaimsFromResponse(ctx, resp)
-		for k,v := range externalClaims {
+		for k, v := range externalClaims {
 			fmt.Println("key", k, "value", string(v))
 		}
 		if err != nil {
@@ -217,11 +206,11 @@ type clientCredential struct {
 }
 
 type externalClaim struct {
-	celMapper externalClaimCELMapper
+	celMapper authenticationcel.ExternalSourceCELMapper
 }
 
 func (ec *externalClaim) getURLWithClaims(ctx context.Context, c claims) (string, error) {
-	evaluationResults, err := ec.celMapper.URL.PathExpression.EvalClaimMapping(ctx, newClaimsValue(c))
+	evaluationResults, err := ec.celMapper.URL.EvalClaimMapping(ctx, newClaimsValue(c))
 	if err != nil {
 		return "", fmt.Errorf("oidc: error evaluating path expression: %w", err)
 	}
@@ -258,7 +247,12 @@ func (ec *externalClaim) getURLWithClaims(ctx context.Context, c claims) (string
 		}
 	}
 
-	urlStr := fmt.Sprintf("%s/%s", ec.celMapper.URL.Base, path)
+	urlExpressionAccessor, ok := evaluationResults.ExpressionAccessor.(*authenticationcel.ExternalSourceURLExpression)
+	if !ok {
+		return "", fmt.Errorf("oidc: error getting url hostname: invalid type conversion, expected ExternalSourceURLExpression")
+	}
+
+	urlStr := fmt.Sprintf("https://%s/%s", urlExpressionAccessor.Hostname, path)
 
 	return urlStr, nil
 }
@@ -277,39 +271,28 @@ func (ec *externalClaim) getClaimsFromResponse(ctx context.Context, resp *http.R
 		return nil, fmt.Errorf("error unmarshalling response body: %w", err)
 	}
 
-	for claim, mapper := range ec.celMapper.Mappings {
-		evalResult, err := mapper.EvalResponse(ctx, types.NewStringInterfaceMap(types.DefaultTypeAdapter, input))
-		if err != nil {
-			fmt.Printf("error evaluating external claim mapping %q: %v\n", claim, err)
-			return nil, fmt.Errorf("error evaluating external claim mapping %q: %w", claim, err)
+	evalResults, err := ec.celMapper.Sources.EvalExternalSources(ctx, types.NewStringInterfaceMap(types.DefaultTypeAdapter, input))
+	if err != nil {
+		return nil, fmt.Errorf("evaluating external source mappings: %w", err)
+	}
+
+	for _, result := range evalResults {
+		sourceMappingExpressionAccessor, ok := result.ExpressionAccessor.(*authenticationcel.ExternalSourceMappingExpression)
+		if !ok {
+			return nil, fmt.Errorf("invalid type conversion, expected ExternalSourceMappingExpression")
 		}
 
 		// TODO: The output may not be a string. Just allow any value? Only allow a subset of return types? Actually only allow a single string?
-		if evalResult.EvalResult.Type() != cel.StringType {
-			return nil, fmt.Errorf("error evaluating external claim mapping %q: %w", claim, errors.New("expected a string return type"))
+		if result.EvalResult.Type() != cel.StringType {
+			return nil, fmt.Errorf("error evaluating external claim mapping %q: %w", sourceMappingExpressionAccessor.Claim, errors.New("expected a string return type"))
 		}
 
-		externalClaims[claim] = json.RawMessage(fmt.Sprintf("%q", evalResult.EvalResult.Value().(string)))
+		externalClaims[sourceMappingExpressionAccessor.Claim] = json.RawMessage(fmt.Sprintf("%q", result.EvalResult.Value().(string)))
 	}
 
 	return externalClaims, nil
 }
 
-type externalClaimCELMapper struct {
-	URL        urlCELMapper
-	Mappings   map[string]ExternalSourceResponseMapper
-	Conditions authenticationcel.ClaimsMapper
-}
-
-type urlCELMapper struct {
-	Base           string
-	PathExpression authenticationcel.ClaimsMapper
-}
-
 type TLS struct {
 	certificateAuthority string
-}
-
-type ExternalSourceResponseMapper interface {
-	EvalResponse(context.Context, traits.Mapper) (*authenticationcel.EvaluationResult, error)
 }

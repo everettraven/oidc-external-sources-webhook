@@ -17,8 +17,7 @@ import (
 	"k8s.io/kubernetes/pkg/util/filesystem"
 	"sigs.k8s.io/yaml"
 
-	authenticationcel "k8s.io/apiserver/pkg/authentication/cel"
-	forkedauthenticationcel "github.com/everettraven/oidc-external-sources-webhook/pkg/internal/thirdparty/kubernetes/apiserver/pkg/authentication/cel"
+	authenticationcel "github.com/everettraven/oidc-external-sources-webhook/pkg/internal/thirdparty/kubernetes/apiserver/pkg/authentication/cel"
 
 )
 
@@ -78,7 +77,7 @@ func (j *JWT) SetDelegateFromConfigFile(ctx context.Context) error {
 		return fmt.Errorf("converting external representation to internal representation: %w", err)
 	}
 
-	compiler := forkedauthenticationcel.NewDefaultCompiler()
+	compiler := authenticationcel.NewDefaultCompiler()
 	fieldErrs := validation.ValidateAuthenticationConfiguration(compiler, out, nil)
 	if err := fieldErrs.ToAggregate(); err != nil {
 		return fmt.Errorf("validating authentication configuration: %w", err)

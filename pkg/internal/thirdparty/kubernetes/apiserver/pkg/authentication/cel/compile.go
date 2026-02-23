@@ -1,6 +1,6 @@
 /*
  NOTE: This file was copied from https://github.com/kubernetes/kubernetes/blob/master/staging/src/k8s.io/apiserver/plugin/pkg/authenticator/token/oidc/oidc.go
-based on commit https://github.com/kubernetes/kubernetes/commit/97587e951b015e6935001091748029471c2b4566
+based on commit https://github.com/kubernetes/kubernetes/commit/bd11e52bfc10b9b08edbc43cd0c83458f38634f2
 
 Any and all commits that modify this file will be documented below.
 
@@ -32,7 +32,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/version"
 	apiservercel "k8s.io/apiserver/pkg/cel"
 	"k8s.io/apiserver/pkg/cel/environment"
-	authenticationcel "k8s.io/apiserver/pkg/authentication/cel"
 )
 
 const (
@@ -66,25 +65,25 @@ func NewCompiler(env *environment.EnvSet) *compiler {
 
 // CompileClaimsExpression compiles the given expressionAccessor into a CEL program that can be evaluated.
 // The claims CEL variable is available to the expression.
-func (c compiler) CompileClaimsExpression(expressionAccessor authenticationcel.ExpressionAccessor) (authenticationcel.CompilationResult, error) {
+func (c compiler) CompileClaimsExpression(expressionAccessor ExpressionAccessor) (CompilationResult, error) {
 	return c.compile(expressionAccessor, claimsVarName)
 }
 
 // CompileUserExpression compiles the given expressionAccessor into a CEL program that can be evaluated.
 // The user CEL variable is available to the expression.
-func (c compiler) CompileUserExpression(expressionAccessor authenticationcel.ExpressionAccessor) (authenticationcel.CompilationResult, error) {
+func (c compiler) CompileUserExpression(expressionAccessor ExpressionAccessor) (CompilationResult, error) {
 	return c.compile(expressionAccessor, userVarName)
 }
 
 // MODIFICATION: add a CompileExternalSourceExpression to compile a given expressionAccessor int a CEL program that can be
 // evaluated where the response CEL variable is available to the expression.
-func (c compiler) CompileExternalSourceExpression(expressionAccessor authenticationcel.ExpressionAccessor) (authenticationcel.CompilationResult, error) {
+func (c compiler) CompileExternalSourceExpression(expressionAccessor ExpressionAccessor) (CompilationResult, error) {
 	return c.compile(expressionAccessor, responseVarName)
 }
 
-func (c compiler) compile(expressionAccessor authenticationcel.ExpressionAccessor, envVarName string) (authenticationcel.CompilationResult, error) {
-	resultError := func(errorString string, errType apiservercel.ErrorType) (authenticationcel.CompilationResult, error) {
-		return authenticationcel.CompilationResult{}, &apiservercel.Error{
+func (c compiler) compile(expressionAccessor ExpressionAccessor, envVarName string) (CompilationResult, error) {
+	resultError := func(errorString string, errType apiservercel.ErrorType) (CompilationResult, error) {
+		return CompilationResult{}, &apiservercel.Error{
 			Type:   errType,
 			Detail: errorString,
 		}
@@ -128,7 +127,7 @@ func (c compiler) compile(expressionAccessor authenticationcel.ExpressionAccesso
 		return resultError("program instantiation failed: "+err.Error(), apiservercel.ErrorTypeInternal)
 	}
 
-	return authenticationcel.CompilationResult{
+	return CompilationResult{
 		Program:            prog,
 		AST:                ast,
 		ExpressionAccessor: expressionAccessor,

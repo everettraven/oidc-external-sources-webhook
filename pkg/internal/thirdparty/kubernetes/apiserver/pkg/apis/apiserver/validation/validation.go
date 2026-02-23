@@ -43,7 +43,7 @@ import (
 	// MODIFICATION: Remapping to copied API representation
 	// api "k8s.io/apiserver/pkg/apis/apiserver"
 	api "github.com/everettraven/oidc-external-sources-webhook/pkg/internal/thirdparty/kubernetes/apiserver/pkg/apis/apiserver"
-	authenticationcel "k8s.io/apiserver/pkg/authentication/cel"
+	authenticationcel "github.com/everettraven/oidc-external-sources-webhook/pkg/internal/thirdparty/kubernetes/apiserver/pkg/authentication/cel"
 	authorizationcel "k8s.io/apiserver/pkg/authorization/cel"
 	"k8s.io/apiserver/pkg/cel"
 	"k8s.io/apiserver/pkg/features"
