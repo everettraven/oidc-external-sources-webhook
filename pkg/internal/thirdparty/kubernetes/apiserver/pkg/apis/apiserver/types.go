@@ -46,7 +46,7 @@ type JWTAuthenticator struct {
 	UserValidationRules  []UserValidationRule
 
 	// MODIFICATION: Add a field for external claims sourcing configuration
-	ExternalClaimsSource ExternalClaimsSource
+	ExternalClaimsSources []ExternalClaimsSource
 }
 
 // Issuer provides the configuration for an external provider's specific settings.
@@ -156,7 +156,8 @@ type UserValidationRule struct {
 type ExternalClaimsSource struct {
 	Authentication Authentication
 	TLS            TLS
-	Sources        []ClaimsSource
+	URL            SourceURL
+	Mappings       []SourcedClaimMapping
 }
 
 type TLS struct {
@@ -173,13 +174,8 @@ const (
 	AuthenticationTypeRequestProvidedToken AuthenticationType = "RequestProvidedToken"
 )
 
-type ClaimsSource struct {
-	URL      SourceURL
-	Mappings []SourcedClaimMapping
-}
-
 type SourceURL struct {
-	Base           string
+	Hostname       string
 	PathExpression string
 }
 

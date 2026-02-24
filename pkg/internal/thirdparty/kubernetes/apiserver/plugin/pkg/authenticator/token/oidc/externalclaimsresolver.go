@@ -5,107 +5,138 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"time"
 
 	"github.com/everettraven/oidc-external-sources-webhook/pkg/internal/thirdparty/kubernetes/apiserver/pkg/apis/apiserver"
 	authenticationcel "github.com/everettraven/oidc-external-sources-webhook/pkg/internal/thirdparty/kubernetes/apiserver/pkg/authentication/cel"
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
-	"github.com/google/cel-go/common/types/traits"
-	"github.com/google/cel-go/interpreter"
+	"k8s.io/klog/v2"
 )
 
 type ExternalClaimsCompatibleCompiler interface {
 	CompileExternalSourceExpression(expressionAccessor authenticationcel.ExpressionAccessor) (authenticationcel.CompilationResult, error)
 }
 
-func NewExternalClaimsResolver(externalClaimSource apiserver.ExternalClaimsSource, compiler authenticationcel.Compiler) (*externalClaimsResolver, error) {
-	out := &externalClaimsResolver{}
-
-	out.clientAuthentication = clientAuthenticationForAuthentication(externalClaimSource.Authentication)
-
-	out.tls = TLS{
-		certificateAuthority: externalClaimSource.TLS.CA,
-	}
-
-	for _, source := range externalClaimSource.Sources {
-		pathExpressionCompiled, err := compiler.CompileClaimsExpression(&authenticationcel.ExternalSourceURLExpression{
-			Hostname:       source.URL.Base,
-			PathExpression: source.URL.PathExpression,
-		})
+func NewExternalClaimsResolver(compiler authenticationcel.Compiler, externalClaimSource ...apiserver.ExternalClaimsSource) (*externalClaimsResolver, error) {
+	externalSources := []externalClaimsSource{}
+	for _, source := range externalClaimSource {
+		httpClient, err := httpClientForTLSConfig(source.TLS)
 		if err != nil {
-			return nil, fmt.Errorf("compiling path expression %q: %w", source.URL.PathExpression, err)
+			return nil, fmt.Errorf("building http client for external source: %w", err)
 		}
 
-		sourceCompilationResults := []authenticationcel.CompilationResult{}
-		for _, mapping := range source.Mappings {
-			mappingExpressionCompiled, err := compiler.CompileExternalSourceExpression(&authenticationcel.ExternalSourceMappingExpression{
-				Claim:      mapping.Name,
-				Expression: mapping.Expression,
-			})
-			if err != nil {
-				return nil, fmt.Errorf("compiling mapping expression %q (%q): %w", mapping.Expression, mapping.Name, err)
-			}
-
-			sourceCompilationResults = append(sourceCompilationResults, mappingExpressionCompiled)
+		externalSourceCELMapper, err := buildExternalSourceCELMapper(compiler, source.URL, source.Mappings)
+		if err != nil {
+			return nil, fmt.Errorf("building external source CEL mapper: %w", err)
 		}
 
-		ec := externalClaim{
-			celMapper: authenticationcel.ExternalSourceCELMapper{
-				URL: authenticationcel.NewClaimsMapper([]authenticationcel.CompilationResult{pathExpressionCompiled}),
-				// TODO: Conditions
-				Sources: authenticationcel.NewExternalSourcesMapper(sourceCompilationResults),
-			},
-		}
-		out.claims = append(out.claims, ec)
+		externalSources = append(externalSources, externalClaimsSource{
+			clientAuthentication: clientAuthenticationForAuthentication(source.Authentication),
+			httpClient:           httpClient,
+			mapper:               externalSourceCELMapper,
+		})
 	}
 
-	return out, nil
+	return &externalClaimsResolver{
+		sources: externalSources,
+	}, nil
 }
 
-type mapper struct {
-	result authenticationcel.CompilationResult
-}
-
-func (m *mapper) EvalResponse(ctx context.Context, in traits.Mapper) (*authenticationcel.EvaluationResult, error) {
-	return m.eval(ctx, &varNameActivation{name: "response", value: in})
-}
-
-func (m *mapper) eval(ctx context.Context, input *varNameActivation) (*authenticationcel.EvaluationResult, error) {
-	evaluation := &authenticationcel.EvaluationResult{
-		ExpressionAccessor: m.result.ExpressionAccessor,
+func httpClientForTLSConfig(tlsCfg apiserver.TLS) (*http.Client, error) {
+	client := &http.Client{
+		Timeout: externalSourceRequestTimeout,
+	}
+	if len(tlsCfg.CA) == 0 {
+		return client, nil
 	}
 
-	evalResult, _, err := m.result.Program.ContextEval(ctx, input)
+	caCertPool := x509.NewCertPool()
+
+	block, _ := pem.Decode([]byte(tlsCfg.CA))
+
+	if block == nil {
+		return nil, errors.New("ca certificate has no block")
+	}
+
+	if block.Type != "CERTIFICATE" || len(block.Headers) != 0 {
+		return nil, errors.New("ca certificate is not a CERTIFICATE type")
+	}
+
+	cert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
-		return nil, fmt.Errorf("expression '%s' resulted in error: %w", m.result.ExpressionAccessor.GetExpression(), err)
+		return nil, fmt.Errorf("parsing certificate: %w", err)
 	}
 
-	evaluation.EvalResult = evalResult
-
-	return evaluation, nil
-}
-
-var _ interpreter.Activation = &varNameActivation{}
-
-type varNameActivation struct {
-	name  string
-	value traits.Mapper
-}
-
-func (v *varNameActivation) ResolveName(name string) (any, bool) {
-	if v.name != name {
-		return nil, false
+	if cert == nil {
+		return nil, errors.New("parsed ca certificate is nil")
 	}
-	return v.value, true
+
+	caCertPool.AddCert(cert)
+
+	client.Transport = &http.Transport{
+		TLSClientConfig: &tls.Config{
+			RootCAs: caCertPool,
+		},
+	}
+
+	return client, nil
 }
 
-func (v *varNameActivation) Parent() interpreter.Activation { return nil }
+func buildExternalSourceCELMapper(compiler authenticationcel.Compiler, sourceURL apiserver.SourceURL, sourceMappings []apiserver.SourcedClaimMapping) (*authenticationcel.ExternalSourceCELMapper, error) {
+	urlMapper, err := buildURLMapperFromSourceURL(compiler, sourceURL)
+	if err != nil {
+		return nil, fmt.Errorf("building url mapper: %w", err)
+	}
+
+	externalClaimsMapper, err := buildExternalClaimsMapperFromSourcedClaimMappings(compiler, sourceMappings...)
+	if err != nil {
+		return nil, fmt.Errorf("building external claims mapper: %w", err)
+	}
+
+	return &authenticationcel.ExternalSourceCELMapper{
+		URL:     urlMapper,
+		Sources: externalClaimsMapper,
+	}, nil
+}
+
+func buildURLMapperFromSourceURL(compiler authenticationcel.Compiler, sourceURL apiserver.SourceURL) (authenticationcel.ClaimsMapper, error) {
+	pathExpressionAccessor := &authenticationcel.ExternalSourceURLExpression{
+		Hostname:       sourceURL.Hostname,
+		PathExpression: sourceURL.PathExpression,
+	}
+	compiledPathExpression, err := compiler.CompileClaimsExpression(pathExpressionAccessor)
+	if err != nil {
+		return nil, fmt.Errorf("compiling path expression: %w", err)
+	}
+
+	return authenticationcel.NewClaimsMapper([]authenticationcel.CompilationResult{compiledPathExpression}), nil
+}
+
+func buildExternalClaimsMapperFromSourcedClaimMappings(compiler authenticationcel.Compiler, sourcedClaimMappings ...apiserver.SourcedClaimMapping) (authenticationcel.ExternalClaimsMapper, error) {
+	compilationResults := []authenticationcel.CompilationResult{}
+	for _, sourcedClaimMapping := range sourcedClaimMappings {
+		expressionAccessor := &authenticationcel.ExternalSourceMappingExpression{
+			Claim:      sourcedClaimMapping.Name,
+			Expression: sourcedClaimMapping.Expression,
+		}
+		compiledExpression, err := compiler.CompileExternalSourceExpression(expressionAccessor)
+		if err != nil {
+			return nil, fmt.Errorf("compiling sourced claim mapping for claim %q: %w", sourcedClaimMapping.Name, err)
+		}
+
+		compilationResults = append(compilationResults, compiledExpression)
+	}
+
+	return authenticationcel.NewExternalClaimsMapper(compilationResults), nil
+}
 
 func clientAuthenticationForAuthentication(authn apiserver.Authentication) clientAuthentication {
 	switch authn.Type {
@@ -116,81 +147,6 @@ func clientAuthenticationForAuthentication(authn apiserver.Authentication) clien
 	}
 
 	return clientAuthentication{}
-}
-
-type externalClaimsResolver struct {
-	// TODO implement
-	clientAuthentication clientAuthentication
-	claims               []externalClaim
-	tls                  TLS
-}
-
-func (ecr *externalClaimsResolver) expand(ctx context.Context, token string, c claims) error {
-	var accessToken string
-
-	if ecr.clientAuthentication.Type == apiserver.AuthenticationTypeRequestProvidedToken {
-		accessToken = token
-	}
-
-	for _, claim := range ecr.claims {
-		// TODO: implement support for evaluating external claim sourcing conditions
-		url, err := claim.getURLWithClaims(ctx, c)
-		if err != nil {
-			return fmt.Errorf("oidc: error during external claims resolution: building external claims URL: %w", err)
-		}
-
-		req, err := http.NewRequest(http.MethodGet, url, nil)
-		if err != nil {
-			return fmt.Errorf("oidc: error during external claims resolution: building external claims request: %w", err)
-		}
-
-		if accessToken != "" {
-			req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", accessToken))
-		}
-
-		client := http.DefaultClient
-
-		if ecr.tls.certificateAuthority != "" {
-			certPool := x509.NewCertPool()
-			certPool.AppendCertsFromPEM([]byte(ecr.tls.certificateAuthority))
-			client = &http.Client{
-				Transport: &http.Transport{
-					TLSClientConfig: &tls.Config{
-						ClientCAs: certPool,
-						// TODO: remove. temporary to resolve:
-						// certificate relies on legacy Common Name field, use SANs instead
-						InsecureSkipVerify: true,
-					},
-				},
-			}
-		}
-
-		resp, err := client.Do(req)
-		if err != nil {
-			return fmt.Errorf("oidc: error during external claims resolution: performing external claims request: %w", err)
-		}
-		if resp == nil {
-			return errors.New("no response?")
-		}
-		if resp.StatusCode != http.StatusOK {
-			responseBody, _ := io.ReadAll(resp.Body)
-			return fmt.Errorf("oidc: received non-200 response code when fetching external claims: %d - %s", resp.StatusCode, string(responseBody))
-		}
-
-		externalClaims, err := claim.getClaimsFromResponse(ctx, resp)
-		for k, v := range externalClaims {
-			fmt.Println("key", k, "value", string(v))
-		}
-		if err != nil {
-			return fmt.Errorf("oidc: error during external claims resolution: getting claims from response: %w", err)
-		}
-
-		for name, value := range externalClaims {
-			c[name] = value
-		}
-	}
-
-	return nil
 }
 
 type clientAuthentication struct {
@@ -205,12 +161,89 @@ type clientCredential struct {
 	tokenEndpoint string
 }
 
-type externalClaim struct {
-	celMapper authenticationcel.ExternalSourceCELMapper
+type externalClaimsSource struct {
+	clientAuthentication clientAuthentication
+	mapper               *authenticationcel.ExternalSourceCELMapper
+	httpClient           *http.Client
 }
 
-func (ec *externalClaim) getURLWithClaims(ctx context.Context, c claims) (string, error) {
-	evaluationResults, err := ec.celMapper.URL.EvalClaimMapping(ctx, newClaimsValue(c))
+type externalClaimsResolver struct {
+	sources []externalClaimsSource
+}
+
+// TODO: Is 500 milliseconds reasonable? Prove this out through testing and update as necessary.
+// Using 500 milliseconds means that we can make 10 requests to external sources before we
+// end up hitting 5 seconds, which is half the default Kubernetes API server timeout (10s) for
+// requests made to a webhook authenticator.
+// 10 requests to external sources is a significant amount of buffer room for something
+// that we expect to be used sparingly and leaves at least 5 seconds for the rest
+// of the claim mapping logic to execute, which should be plenty of time.
+const externalSourceRequestTimeout = 500 * time.Millisecond
+
+// expand attempts to expand the claims made available to the claim mappings that are
+// used to construct a cluster identity by fetching additional claims from
+// sources external to the JWT.
+// If it is unable to successfully expand claims for an external source, those claims
+// will not be present, and no error will be returned. Errors are logged.
+// Errors are not returned by this method because partial evaluation of external
+// claim sources is preferred over failing so that authentication is not
+// entirely dependent upon the availability of the external sources (although
+// authentication may be in a degraded state if external sources are unavailable).
+func (ecr *externalClaimsResolver) expand(ctx context.Context, token string, c claims) {
+	for _, source := range ecr.sources {
+		var accessToken string
+		if source.clientAuthentication.Type == apiserver.AuthenticationTypeRequestProvidedToken {
+			accessToken = token
+		}
+
+		// TODO: implement support for evaluating external claim sourcing conditions
+		url, err := getURLWithClaims(ctx, c, source.mapper.URL)
+		if err != nil {
+			klog.Errorf("external claims resolver: could not resolve URL for external source: %v", err)
+			continue
+		}
+
+		req, err := http.NewRequest(http.MethodGet, url, nil)
+		if err != nil {
+			klog.Errorf("external claims resolver: building external claims request: %v", err)
+			continue
+		}
+
+		if accessToken != "" {
+			req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+		}
+
+		resp, err := source.httpClient.Do(req)
+		if err != nil {
+			klog.Errorf("external claims resolver: performing external claims request: %v", err)
+			continue
+		}
+		if resp == nil {
+			continue
+		}
+		if resp.StatusCode != http.StatusOK {
+			responseBody, _ := io.ReadAll(resp.Body)
+			klog.Errorf("external claims resolver: received a %d status code when fetching external claims: response body: %s ", resp.StatusCode, string(responseBody))
+			continue
+		}
+
+		externalClaims, err := getClaimsFromResponse(ctx, resp, source.mapper.Sources)
+		for k, v := range externalClaims {
+			fmt.Println("key", k, "value", string(v))
+		}
+		if err != nil {
+			klog.Errorf("external claims resolver: getting claims from response: %v", err)
+			continue
+		}
+
+		for name, value := range externalClaims {
+			c[name] = value
+		}
+	}
+}
+
+func getURLWithClaims(ctx context.Context, c claims, urlMapper authenticationcel.ClaimsMapper) (string, error) {
+	evaluationResults, err := urlMapper.EvalClaimMapping(ctx, newClaimsValue(c))
 	if err != nil {
 		return "", fmt.Errorf("oidc: error evaluating path expression: %w", err)
 	}
@@ -219,7 +252,6 @@ func (ec *externalClaim) getURLWithClaims(ctx context.Context, c claims) (string
 		return "", fmt.Errorf("oidc: error evaluating path expression: %w", fmt.Errorf("path expression must return a list, but got %v", evaluationResults.EvalResult.Type()))
 	}
 
-	// TODO: optimize
 	pathSegmentsVal := evaluationResults.EvalResult.Value()
 
 	refVals, ok := pathSegmentsVal.([]ref.Val)
@@ -227,21 +259,14 @@ func (ec *externalClaim) getURLWithClaims(ctx context.Context, c claims) (string
 		return "", fmt.Errorf("could not convert output type %T to list of values", pathSegmentsVal)
 	}
 
-	pathSegments := []string{}
-
+	path := ""
 	for _, val := range refVals {
 		str, ok := val.Value().(string)
 		if !ok {
 			return "", fmt.Errorf("could not convert list element type %T to string", val.Value())
 		}
 
-		pathSegments = append(pathSegments, str)
-	}
-
-	path := ""
-	for _, pathSegment := range pathSegments {
-		var err error
-		path, err = url.JoinPath(path, url.PathEscape(pathSegment))
+		path, err = url.JoinPath(path, url.PathEscape(str))
 		if err != nil {
 			return "", fmt.Errorf("oidc: error building url path: %w", err)
 		}
@@ -257,9 +282,7 @@ func (ec *externalClaim) getURLWithClaims(ctx context.Context, c claims) (string
 	return urlStr, nil
 }
 
-func (ec *externalClaim) getClaimsFromResponse(ctx context.Context, resp *http.Response) (claims, error) {
-	externalClaims := claims{}
-
+func getClaimsFromResponse(ctx context.Context, resp *http.Response, sourcedClaimsMapper authenticationcel.ExternalClaimsMapper) (claims, error) {
 	responseBodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("error reading response body: %w", err)
@@ -271,18 +294,18 @@ func (ec *externalClaim) getClaimsFromResponse(ctx context.Context, resp *http.R
 		return nil, fmt.Errorf("error unmarshalling response body: %w", err)
 	}
 
-	evalResults, err := ec.celMapper.Sources.EvalExternalSources(ctx, types.NewStringInterfaceMap(types.DefaultTypeAdapter, input))
+	evalResults, err := sourcedClaimsMapper.EvalExternalClaims(ctx, types.NewStringInterfaceMap(types.DefaultTypeAdapter, input))
 	if err != nil {
 		return nil, fmt.Errorf("evaluating external source mappings: %w", err)
 	}
 
+	externalClaims := claims{}
 	for _, result := range evalResults {
 		sourceMappingExpressionAccessor, ok := result.ExpressionAccessor.(*authenticationcel.ExternalSourceMappingExpression)
 		if !ok {
 			return nil, fmt.Errorf("invalid type conversion, expected ExternalSourceMappingExpression")
 		}
 
-		// TODO: The output may not be a string. Just allow any value? Only allow a subset of return types? Actually only allow a single string?
 		if result.EvalResult.Type() != cel.StringType {
 			return nil, fmt.Errorf("error evaluating external claim mapping %q: %w", sourceMappingExpressionAccessor.Claim, errors.New("expected a string return type"))
 		}
@@ -291,8 +314,4 @@ func (ec *externalClaim) getClaimsFromResponse(ctx context.Context, resp *http.R
 	}
 
 	return externalClaims, nil
-}
-
-type TLS struct {
-	certificateAuthority string
 }

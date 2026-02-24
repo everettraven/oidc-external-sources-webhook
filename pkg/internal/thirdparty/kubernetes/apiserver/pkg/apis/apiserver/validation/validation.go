@@ -104,6 +104,8 @@ func validateJWTAuthenticator(compiler authenticationcel.Compiler, authenticator
 	allErrs = append(allErrs, validateClaimValidationRules(compiler, state, authenticator.ClaimValidationRules, fldPath.Child("claimValidationRules"), structuredAuthnFeatureEnabled)...)
 	allErrs = append(allErrs, validateClaimMappings(compiler, state, authenticator.ClaimMappings, fldPath.Child("claimMappings"), structuredAuthnFeatureEnabled)...)
 	allErrs = append(allErrs, validateUserValidationRules(compiler, state, authenticator.UserValidationRules, fldPath.Child("userValidationRules"), structuredAuthnFeatureEnabled)...)
+	// MODIFICATION: Validate external claim sources
+	allErrs = append(allErrs, validateExternalClaimSources(compiler, state, authenticator.ExternalClaimsSources, fldPath.Child("externalClaimsSources"), structuredAuthnFeatureEnabled)...)
 
 	return state.mapper, allErrs
 }
@@ -667,3 +669,10 @@ func convertCELErrorToValidationError(fldPath *field.Path, expression string, er
 	}
 	return field.InternalError(fldPath, fmt.Errorf("error is not cel error: %w", err))
 }
+
+// MODIFICATION: Validation functions for validating externalClaimsSources
+func validateExternalClaimSources(compiler authenticationcel.Compiler, state *validationState, externalClaimsSources []api.ExternalClaimsSource, fldPath *field.Path, structuredAuthnFeatureEnabled bool) field.ErrorList {
+	// TODO: implement
+	return nil
+}
+

@@ -75,15 +75,15 @@ type UserMapper interface {
 	EvalUser(ctx context.Context, userInfo traits.Mapper) ([]EvaluationResult, error)
 }
 
-// MODIFICATION: Add ExternalSourcesMapper and expression, url, conditions accessors
-type ExternalSourcesMapper interface {
-	// EvalExternalSource evaluates the given external source and returns an EvaluationResult.
-	// This is used for external claim source validation that contains a single external source.
-	EvalExternalSource(context.Context, traits.Mapper) (EvaluationResult, error)
+// MODIFICATION: Add ExternalClaimsMapper and expression, url, conditions accessors
+type ExternalClaimsMapper interface {
+	// EvalExternalClaim evaluates the given external claim and returns an EvaluationResult.
+	// This is used for external claim source validation that contains a single external claim.
+	EvalExternalClaim(context.Context, traits.Mapper) (EvaluationResult, error)
 
-	// EvalExternalSources evaluates the given external sources and returns a list of EvaluationResult.
-	// This is used for external claim source validation that contains multiple external sources.
-	EvalExternalSources(context.Context, traits.Mapper) ([]EvaluationResult, error)
+	// EvalExternalClaims evaluates the given external claims and returns a list of EvaluationResult.
+	// This is used for external claim source validation that contains multiple external claims.
+	EvalExternalClaims(context.Context, traits.Mapper) ([]EvaluationResult, error)
 }
 
 var _ ExpressionAccessor = &ExternalSourceMappingExpression{}

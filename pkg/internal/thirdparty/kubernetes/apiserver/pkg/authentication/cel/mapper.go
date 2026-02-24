@@ -55,7 +55,7 @@ type CELMapper struct {
 type ExternalSourceCELMapper struct {
 	URL        ClaimsMapper
 	Conditions ClaimsMapper
-	Sources    ExternalSourcesMapper
+	Sources    ExternalClaimsMapper
 }
 
 // NewClaimsMapper returns a new ClaimsMapper.
@@ -72,7 +72,7 @@ func NewUserMapper(compilationResults []CompilationResult) UserMapper {
 	}
 }
 
-func NewExternalSourcesMapper(compilationResults []CompilationResult) ExternalSourcesMapper {
+func NewExternalClaimsMapper(compilationResults []CompilationResult) ExternalClaimsMapper {
 	return &mapper{
 		compilationResults: compilationResults,
 	}
@@ -100,7 +100,7 @@ func (m *mapper) EvalUser(ctx context.Context, userInfo traits.Mapper) ([]Evalua
 	return m.eval(ctx, &varNameActivation{name: userVarName, value: userInfo})
 }
 
-func (m *mapper) EvalExternalSource(ctx context.Context, response traits.Mapper) (EvaluationResult, error) {
+func (m *mapper) EvalExternalClaim(ctx context.Context, response traits.Mapper) (EvaluationResult, error) {
 	results, err := m.eval(ctx, &varNameActivation{name: responseVarName, value: response})
 	if err != nil {
 		return EvaluationResult{}, err
@@ -111,7 +111,7 @@ func (m *mapper) EvalExternalSource(ctx context.Context, response traits.Mapper)
 	return results[0], nil
 }
 
-func (m *mapper) EvalExternalSources(ctx context.Context, response traits.Mapper) ([]EvaluationResult, error) {
+func (m *mapper) EvalExternalClaims(ctx context.Context, response traits.Mapper) ([]EvaluationResult, error) {
 	return m.eval(ctx, &varNameActivation{name: responseVarName, value: response})
 }
 

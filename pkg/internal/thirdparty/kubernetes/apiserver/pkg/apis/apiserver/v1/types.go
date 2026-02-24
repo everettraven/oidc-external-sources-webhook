@@ -86,7 +86,7 @@ type JWTAuthenticator struct {
 	// other endpoint on the issuer to be fetched and used during the identity
 	// mapping process.
 	// +optional
-	ExternalClaimsSource ExternalClaimsSource `json:"externalClaimsSource,omitempty"`
+	ExternalClaimsSources []ExternalClaimsSource `json:"externalClaimsSources,omitempty"`
 }
 
 // Issuer provides the configuration for an external provider's specific settings.
@@ -399,10 +399,15 @@ type ExternalClaimsSource struct {
 	// settings when fetching external claims from this source.
 	// +optional
 	TLS *TLS `json:"tls,omitempty"`
-	// sources is a required list of the sources in which to fetch an
-	// external claim from.
+	// url is a required configuration of the URL
+	// for which the external claims are located.
 	// +required
-	Sources []ClaimsSource `json:"sources,omitempty"`
+	URL      SourceURL `json:"url,omitzero"`
+	// mappings is a required list of the claim
+	// and response handling expression pairs
+	// that produces the claims from the external source.
+	// +required
+	Mappings []SourcedClaimMapping `json:"mappings,omitempty"`
 }
 
 type TLS struct {
@@ -432,23 +437,10 @@ const (
 	AuthenticationTypeRequestProvidedToken AuthenticationType = "RequestProvidedToken"
 )
 
-type ClaimsSource struct {
-	// url is a required configuration of the URL
-	// for which the external claims are located.
-	// +required
-	URL      SourceURL `json:"url,omitzero"`
-	// mappings is a required list of the claim
-	// and response handling expression pairs
-	// that produces the claims from the external source.
-	// +required
-	Mappings []SourcedClaimMapping `json:"mappings,omitempty"`
-}
-
 type SourceURL struct {
-	// base is a required base URL for which the external claims are located.
-	// It must use the HTTPS scheme and must only specify the hostname.
+	// hostname is a required hostname for which the external claims are located.
 	// +required
-	Base           string `json:"base,omitempty"`
+	Hostname           string `json:"hostname,omitempty"`
 	// pathExpression is a required CEL expression that returns a list
 	// of string values used to construct the URL path.
 	// Claims from the token used for the request to the kube-apiserver

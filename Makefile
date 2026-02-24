@@ -73,19 +73,18 @@ $${KEYCLOAK_CERTIFICATE_AUTHORITY}
        prefix: ""
       groups:
         expression: "claims.groups.split(',')"
-    externalClaimsSource:
-      authentication:
+    externalClaimsSources:
+    - authentication:
         type: RequestProvidedToken
       tls:
         ca: |
 $${KEYCLOAK_CERTIFICATE_AUTHORITY}
-      sources:
-        - url:
-            base: https://keycloak:8443
-            pathExpression: "['realms', 'k8s', 'protocol', 'openid-connect', 'userinfo']"
-          mappings:
-            - name: groups
-              expression: "response.groups.join(',')"
+      url:
+        hostname: keycloak:8443
+        pathExpression: "['realms', 'k8s', 'protocol', 'openid-connect', 'userinfo']"
+      mappings:
+        - name: groups
+          expression: "response.groups.join(',')"
 endef
 export CONFIG_TEMPLATE
 

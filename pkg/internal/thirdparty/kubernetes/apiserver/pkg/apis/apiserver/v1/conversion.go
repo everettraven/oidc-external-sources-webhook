@@ -1,3 +1,5 @@
+// TODO: Should wire up conversion-gen to automatically create conversion methods instead of hand-writing
+// new conversions
 package v1
 
 import (
@@ -37,11 +39,18 @@ func Convert_v1_JWTAuthenticator_To_apiserver_JWTAuthenticator(in *JWTAuthentica
 
 	out.ClaimValidationRules = *(*[]apiserver.ClaimValidationRule)(unsafe.Pointer(&in.ClaimValidationRules))
 	out.UserValidationRules = *(*[]apiserver.UserValidationRule)(unsafe.Pointer(&in.UserValidationRules))
-	
-	err = Convert_v1_ExternalClaimsSource_To_apiserver_ExternalClaimsSource(&in.ExternalClaimsSource, &out.ExternalClaimsSource)
-	if err != nil {
-		return fmt.Errorf("converting external claims source: %w", err)
+
+	outECS := []apiserver.ExternalClaimsSource{}
+	for _, inEC := range in.ExternalClaimsSources {
+		outEC := &apiserver.ExternalClaimsSource{}
+		err := Convert_v1_ExternalClaimsSource_To_apiserver_ExternalClaimsSource(&inEC, outEC)
+		if err != nil {
+			return fmt.Errorf("converting external claims source: %w", err)
+		}
+		outECS = append(outECS, *outEC)
 	}
+
+	out.ExternalClaimsSources = outECS
 
 	return nil
 }
@@ -100,8 +109,26 @@ func Convert_v1_ExternalClaimsSource_To_apiserver_ExternalClaimsSource(in *Exter
 		return err
 	}
 
-	out.Sources = *(*[]apiserver.ClaimsSource)(unsafe.Pointer(&in.Sources))
+	if err := Convert_v1_SourceURL_To_apiserver_SourceURL(&in.URL, &out.URL); err != nil {
+		return err
+	}
 
+	out.Mappings = *(*[]apiserver.SourcedClaimMapping)(unsafe.Pointer(&in.Mappings))
+
+	return nil
+}
+
+func Convert_v1_SourceURL_To_apiserver_SourceURL(in *SourceURL, out *apiserver.SourceURL) error {
+	if out == nil {
+		out = &apiserver.SourceURL{}
+	}
+
+	if in == nil {
+		return nil
+	}
+
+	out.Hostname = in.Hostname
+	out.PathExpression = in.PathExpression
 	return nil
 }
 

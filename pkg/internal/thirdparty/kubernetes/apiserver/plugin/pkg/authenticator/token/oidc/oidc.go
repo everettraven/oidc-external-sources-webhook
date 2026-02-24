@@ -429,8 +429,8 @@ func New(lifecycleCtx context.Context, opts Options) (AuthenticatorTokenWithHeal
 		err: fmt.Errorf("oidc: authenticator for issuer %q is not initialized", authn.jwtAuthenticator.Issuer.URL),
 	})
 
-	if len(opts.JWTAuthenticator.ExternalClaimsSource.Sources) > 0 {
-		externalSourceResolver, err := NewExternalClaimsResolver(opts.JWTAuthenticator.ExternalClaimsSource, compiler)
+	if len(opts.JWTAuthenticator.ExternalClaimsSources) > 0 {
+		externalSourceResolver, err := NewExternalClaimsResolver(compiler, opts.JWTAuthenticator.ExternalClaimsSources...)
 		if err != nil {
 			return nil, err
 		}
@@ -909,9 +909,7 @@ func (a *jwtAuthenticator) AuthenticateToken(ctx context.Context, token string) 
 	}
 
 	if a.externalSourceResolver != nil {
-		if err := a.externalSourceResolver.expand(ctx, token, c); err != nil {
-			return nil, false, fmt.Errorf("oidc: could not expand external claims: %v", err)
-		}
+		a.externalSourceResolver.expand(ctx, token, c)
 	}
 
 	var claimsValue *lazy.MapValue
@@ -1091,9 +1089,6 @@ func (a *jwtAuthenticator) getGroups(ctx context.Context, c claims, claimsValue 
 	if err != nil {
 		return nil, fmt.Errorf("oidc: error evaluating group claim expression: %w", err)
 	}
-
-	fmt.Println(evalResult.EvalResult.Type())
-	fmt.Println(evalResult.EvalResult.Value())
 
 	groups, err := convertCELValueToStringList(evalResult.EvalResult)
 	if err != nil {
