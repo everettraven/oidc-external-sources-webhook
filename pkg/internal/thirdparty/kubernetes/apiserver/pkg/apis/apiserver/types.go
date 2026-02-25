@@ -89,7 +89,6 @@ type Issuer struct {
 	CertificateAuthority string
 	Audiences            []string
 	AudienceMatchPolicy  AudienceMatchPolicyType
-	EgressSelectorType   EgressSelectorType
 }
 
 // AudienceMatchPolicyType is a set of valid values for Issuer.AudienceMatchPolicy
@@ -98,14 +97,6 @@ type AudienceMatchPolicyType string
 // Valid types for AudienceMatchPolicyType
 const (
 	AudienceMatchPolicyMatchAny AudienceMatchPolicyType = "MatchAny"
-)
-
-type EgressSelectorType string
-
-const (
-	EgressSelectorControlPlane EgressSelectorType = "controlplane"
-
-	EgressSelectorCluster EgressSelectorType = "cluster"
 )
 
 // ClaimValidationRule provides the configuration for a single claim validation rule.

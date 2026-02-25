@@ -70,15 +70,12 @@ import (
 	// MODIFICATION: Remapping to copied validation package
 	// apiservervalidation "k8s.io/apiserver/pkg/apis/apiserver/validation"
 	apiservervalidation "github.com/everettraven/oidc-external-sources-webhook/pkg/internal/thirdparty/kubernetes/apiserver/pkg/apis/apiserver/validation"
-	"k8s.io/apiserver/pkg/authentication/authenticator"
 	authenticationcel "github.com/everettraven/oidc-external-sources-webhook/pkg/internal/thirdparty/kubernetes/apiserver/pkg/authentication/cel"
+	"k8s.io/apiserver/pkg/authentication/authenticator"
 	authenticationtokenjwt "k8s.io/apiserver/pkg/authentication/token/jwt"
 	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/apiserver/pkg/cel"
 	"k8s.io/apiserver/pkg/cel/lazy"
-	"k8s.io/apiserver/pkg/features"
-	"k8s.io/apiserver/pkg/server/egressselector"
-	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	certutil "k8s.io/client-go/util/cert"
 	"k8s.io/klog/v2"
 )
@@ -105,9 +102,6 @@ type Options struct {
 
 	// PEM encoded root certificate contents of the provider.  Mutually exclusive with Client.
 	CAContentProvider CAContentProvider
-
-	// EgressLookup allows for optional opt-in egress configuration via a custom dialer.  Mutually exclusive with Client.
-	EgressLookup egressselector.Lookup
 
 	// Optional http.Client used to make all requests to the remote issuer.  Mutually exclusive with CAContentProvider and EgressLookup.
 	Client *http.Client
@@ -311,10 +305,6 @@ func New(lifecycleCtx context.Context, opts Options) (AuthenticatorTokenWithHeal
 		return nil, fmt.Errorf("oidc: Client and CAContentProvider are mutually exclusive")
 	}
 
-	if opts.Client != nil && opts.EgressLookup != nil {
-		return nil, fmt.Errorf("oidc: Client and EgressLookup are mutually exclusive")
-	}
-
 	client := opts.Client
 
 	if client == nil {
@@ -330,25 +320,8 @@ func New(lifecycleCtx context.Context, opts Options) (AuthenticatorTokenWithHeal
 			klog.Info("OIDC: No x509 certificates provided, will use host's root CA set")
 		}
 
-		var customDial net.DialFunc
-		switch et := opts.JWTAuthenticator.Issuer.EgressSelectorType; et {
-		case "":
-			// valid but nothing to do
-		case apiserver.EgressSelectorControlPlane:
-			customDial, err = egressLookupForType(opts.EgressLookup, egressselector.ControlPlane)
-		case apiserver.EgressSelectorCluster:
-			customDial, err = egressLookupForType(opts.EgressLookup, egressselector.Cluster)
-		default:
-			// this should be impossible as validation should catch this at an earlier point
-			return nil, fmt.Errorf("oidc: unknown egress selector type %q", et)
-		}
-		if err != nil {
-			return nil, err
-		}
-
 		// Copied from http.DefaultTransport.
 		tr := net.SetTransportDefaults(&http.Transport{
-			DialContext: customDial,
 			// According to golang's doc, if RootCAs is nil,
 			// TLS uses the host's root CA set.
 			TLSClientConfig: &tls.Config{RootCAs: roots, InsecureSkipVerify: true},
@@ -462,30 +435,28 @@ func New(lifecycleCtx context.Context, opts Options) (AuthenticatorTokenWithHeal
 					return false, nil
 				}
 
-				if utilfeature.DefaultFeatureGate.Enabled(features.StructuredAuthenticationConfigurationJWKSMetrics) {
-					providerJSON := &struct {
-						JWKSURL string `json:"jwks_uri"`
-					}{}
+				providerJSON := &struct {
+					JWKSURL string `json:"jwks_uri"`
+				}{}
 
-					if err := provider.Claims(providerJSON); err != nil {
-						klog.Errorf("oidc authenticator: error getting JWKS URL: %v", err)
-						authn.healthCheck.Store(&errorHolder{err: err})
-						return false, nil
-					}
-					if len(providerJSON.JWKSURL) == 0 {
-						klog.Errorf("provider did not return JWKS URL")
-						authn.healthCheck.Store(&errorHolder{err: fmt.Errorf("provider did not return JWKS URL")})
-						return false, nil
-					}
-
-					clientWithJWKSMetrics := *client
-					clientWithJWKSMetrics.Transport = withMetricsRoundTripper(client.Transport, providerJSON.JWKSURL, issuerURL, opts.APIServerID, lifecycleCtx)
-					client = &clientWithJWKSMetrics
-
-					remoteKeySet := oidc.NewRemoteKeySet(oidc.ClientContext(lifecycleCtx, client), providerJSON.JWKSURL)
-					authn.setVerifier(&idTokenVerifier{oidc.NewVerifier(issuerURL, remoteKeySet, verifierConfig), audiences})
-					return true, nil
+				if err := provider.Claims(providerJSON); err != nil {
+					klog.Errorf("oidc authenticator: error getting JWKS URL: %v", err)
+					authn.healthCheck.Store(&errorHolder{err: err})
+					return false, nil
 				}
+				if len(providerJSON.JWKSURL) == 0 {
+					klog.Errorf("provider did not return JWKS URL")
+					authn.healthCheck.Store(&errorHolder{err: fmt.Errorf("provider did not return JWKS URL")})
+					return false, nil
+				}
+
+				clientWithJWKSMetrics := *client
+				clientWithJWKSMetrics.Transport = withMetricsRoundTripper(client.Transport, providerJSON.JWKSURL, issuerURL, opts.APIServerID, lifecycleCtx)
+				client = &clientWithJWKSMetrics
+
+				remoteKeySet := oidc.NewRemoteKeySet(oidc.ClientContext(lifecycleCtx, client), providerJSON.JWKSURL)
+				authn.setVerifier(&idTokenVerifier{oidc.NewVerifier(issuerURL, remoteKeySet, verifierConfig), audiences})
+				return true, nil
 
 				verifier := provider.Verifier(verifierConfig)
 				authn.setVerifier(&idTokenVerifier{verifier, audiences})
@@ -495,22 +466,6 @@ func New(lifecycleCtx context.Context, opts Options) (AuthenticatorTokenWithHeal
 	}
 
 	return newInstrumentedAuthenticator(issuerURL, authn), nil
-}
-
-func egressLookupForType(egressLookup egressselector.Lookup, egressSelector egressselector.EgressType) (net.DialFunc, error) {
-	if egressLookup == nil {
-		return nil, fmt.Errorf("oidc: egress lookup required with egress selector type %q", egressSelector)
-	}
-	customDial, err := egressLookup(egressSelector.AsNetworkContext())
-	if err != nil {
-		return nil, fmt.Errorf("oidc: egress lookup for %q failed: %w", egressSelector, err)
-	}
-	// we are stricter than other egress lookups because this is opt-in config
-	// we expect the user who is configuring the JWT authenticator to keep it in sync with the egress configuration
-	if customDial == nil {
-		return nil, fmt.Errorf("oidc: egress lookup for %q is not configured", egressSelector)
-	}
-	return customDial, nil
 }
 
 type errorHolder struct {

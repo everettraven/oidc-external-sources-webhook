@@ -90,7 +90,6 @@ func Convert_v1_Issuer_To_apiserver_Issuer(in *Issuer, out *apiserver.Issuer) er
 	out.CertificateAuthority = in.CertificateAuthority
 	out.Audiences = *(*[]string)(unsafe.Pointer(&in.Audiences))
 	out.AudienceMatchPolicy = apiserver.AudienceMatchPolicyType(in.AudienceMatchPolicy)
-	out.EgressSelectorType = apiserver.EgressSelectorType(in.EgressSelectorType)
 	return nil
 }
 
