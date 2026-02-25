@@ -369,7 +369,7 @@ type ExternalClaimsSource struct {
 	// authentication is a required field that configures how the
 	// kube-apiserver authenticates with an external claims source.
 	// +required
-	Authentication Authentication `json:"authentication,omitzero"`
+	Authentication *Authentication `json:"authentication,omitempty"`
 	// tls is an optional field that configures the http client TLS
 	// settings when fetching external claims from this source.
 	// +optional
@@ -377,7 +377,7 @@ type ExternalClaimsSource struct {
 	// url is a required configuration of the URL
 	// for which the external claims are located.
 	// +required
-	URL SourceURL `json:"url,omitzero"`
+	URL *SourceURL `json:"url,omitempty"`
 	// mappings is a required list of the claim
 	// and response handling expression pairs
 	// that produces the claims from the external source.
@@ -397,6 +397,7 @@ type ExternalClaimsSource struct {
 type TLS struct {
 	// ca is a required field that configures the certificate authority
 	// used to validate TLS connections with the external claims source.
+	// Must not be empty and must be a valid PEM-encoded certificate.
 	// +required
 	CA string `json:"ca,omitempty"`
 }

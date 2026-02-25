@@ -100,15 +100,15 @@ func Convert_v1_ExternalClaimsSource_To_apiserver_ExternalClaimsSource(in *Exter
 	if out == nil {
 		out = &apiserver.ExternalClaimsSource{}
 	}
-	if err := Convert_v1_Authentication_To_apiserver_Authentication(&in.Authentication, &out.Authentication); err != nil {
+	if err := Convert_v1_Authentication_To_apiserver_Authentication(in.Authentication, out.Authentication); err != nil {
 		return err
 	}
 
-	if err := Convert_v1_TLS_To_apiserver_TLS(in.TLS, &out.TLS); err != nil {
+	if err := Convert_v1_TLS_To_apiserver_TLS(in.TLS, out.TLS); err != nil {
 		return err
 	}
 
-	if err := Convert_v1_SourceURL_To_apiserver_SourceURL(&in.URL, &out.URL); err != nil {
+	if err := Convert_v1_SourceURL_To_apiserver_SourceURL(in.URL, out.URL); err != nil {
 		return err
 	}
 

@@ -145,9 +145,9 @@ type UserValidationRule struct {
 // MODIFICATIONS: New types for external claims sourcing.
 
 type ExternalClaimsSource struct {
-	Authentication Authentication
-	TLS            TLS
-	URL            SourceURL
+	Authentication *Authentication
+	TLS            *TLS
+	URL            *SourceURL
 	Mappings       []SourcedClaimMapping
 	Conditions     []ExternalSourceCondition
 }
