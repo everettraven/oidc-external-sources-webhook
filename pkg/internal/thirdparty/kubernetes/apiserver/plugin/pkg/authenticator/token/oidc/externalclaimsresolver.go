@@ -33,7 +33,7 @@ func NewExternalClaimsResolver(compiler authenticationcel.Compiler, externalClai
 			return nil, fmt.Errorf("building http client for external source: %w", err)
 		}
 
-		externalSourceCELMapper, err := buildExternalSourceCELMapper(compiler, source.URL, source.Mappings)
+		externalSourceCELMapper, err := buildExternalSourceCELMapper(compiler, source.URL, source.Mappings, source.Conditions)
 		if err != nil {
 			return nil, fmt.Errorf("building external source CEL mapper: %w", err)
 		}
@@ -90,21 +90,44 @@ func httpClientForTLSConfig(tlsCfg apiserver.TLS) (*http.Client, error) {
 	return client, nil
 }
 
-func buildExternalSourceCELMapper(compiler authenticationcel.Compiler, sourceURL apiserver.SourceURL, sourceMappings []apiserver.SourcedClaimMapping) (*authenticationcel.ExternalSourceCELMapper, error) {
+func buildExternalSourceCELMapper(compiler authenticationcel.Compiler, sourceURL apiserver.SourceURL, sourceMappings []apiserver.SourcedClaimMapping, sourceConditions []apiserver.ExternalSourceCondition) (*authenticationcel.ExternalSourceCELMapper, error) {
 	urlMapper, err := buildURLMapperFromSourceURL(compiler, sourceURL)
 	if err != nil {
-		return nil, fmt.Errorf("building url mapper: %w", err)
+		return nil, fmt.Errorf("building external claims url mapper: %w", err)
 	}
 
 	externalClaimsMapper, err := buildExternalClaimsMapperFromSourcedClaimMappings(compiler, sourceMappings...)
 	if err != nil {
-		return nil, fmt.Errorf("building external claims mapper: %w", err)
+		return nil, fmt.Errorf("building external claims response mapper: %w", err)
+	}
+
+	conditionsMapper, err := buildExternalSourceConditionMapperFromConditions(compiler, sourceConditions)
+	if err != nil {
+		return nil, fmt.Errorf("building external claims conditions mapper: %w", err)
 	}
 
 	return &authenticationcel.ExternalSourceCELMapper{
 		URL:     urlMapper,
 		Sources: externalClaimsMapper,
+		Conditions: conditionsMapper,
 	}, nil
+}
+
+func buildExternalSourceConditionMapperFromConditions(compiler authenticationcel.Compiler, sourceConditions []apiserver.ExternalSourceCondition) (authenticationcel.ClaimsMapper, error) {
+	compilationResults := []authenticationcel.CompilationResult{}
+	for _, condition := range sourceConditions {
+		accessor := authenticationcel.ExternalSourceConditionExpression{
+			Expression: condition.Expression,
+		}
+		compiled, err := compiler.CompileClaimsExpression(&accessor)
+		if err != nil {
+			return nil, fmt.Errorf("compiling condition %q: %w", condition.Expression, err)
+		}
+
+		compilationResults = append(compilationResults, compiled)
+	}
+
+	return authenticationcel.NewClaimsMapper(compilationResults), nil
 }
 
 func buildURLMapperFromSourceURL(compiler authenticationcel.Compiler, sourceURL apiserver.SourceURL) (authenticationcel.ClaimsMapper, error) {
@@ -191,12 +214,21 @@ const externalSourceRequestTimeout = 500 * time.Millisecond
 // authentication may be in a degraded state if external sources are unavailable).
 func (ecr *externalClaimsResolver) expand(ctx context.Context, token string, c claims) {
 	for _, source := range ecr.sources {
+		// Before anything, first evaluate whether or not the sourcing conditions are met	
+		shouldSource, err := evaluateConditionsWithClaims(ctx, c, source.mapper.Conditions)
+		if err != nil {
+			klog.Errorf("external claims resolver: could not evaluate conditions for external source: %v", err)
+			continue
+		}
+		if !shouldSource {
+			continue
+		}
+
 		var accessToken string
 		if source.clientAuthentication.Type == apiserver.AuthenticationTypeRequestProvidedToken {
 			accessToken = token
 		}
 
-		// TODO: implement support for evaluating external claim sourcing conditions
 		url, err := getURLWithClaims(ctx, c, source.mapper.URL)
 		if err != nil {
 			klog.Errorf("external claims resolver: could not resolve URL for external source: %v", err)
@@ -240,6 +272,32 @@ func (ecr *externalClaimsResolver) expand(ctx context.Context, token string, c c
 			c[name] = value
 		}
 	}
+}
+
+func evaluateConditionsWithClaims(ctx context.Context, c claims, claimsMapper authenticationcel.ClaimsMapper) (bool, error) {
+	evalResults, err := claimsMapper.EvalClaimMappings(ctx, newClaimsValue(c))
+	if err != nil {
+		return false, fmt.Errorf("evaluating sourcing conditions: %w", err)
+	}
+
+	for _, result := range evalResults {
+		if result.EvalResult.Type() != cel.BoolType {
+			return false, fmt.Errorf("evaluating sourcing conditions: %w", fmt.Errorf("sourcing conditions must return a boolean, but got %v", result.EvalResult.Type()))
+		}
+
+		satisfied, ok := result.EvalResult.Value().(bool)
+		if !ok {
+			return false, fmt.Errorf("could not convert type %T to bool", result.EvalResult.Value())
+		}
+
+		// If any condition is not satisfied, the external source should not be consulted.
+		if !satisfied {
+			return false, nil
+		}
+	}
+
+	// if we made it here, no conditions evaluated to false
+	return true, nil
 }
 
 func getURLWithClaims(ctx context.Context, c claims, urlMapper authenticationcel.ClaimsMapper) (string, error) {

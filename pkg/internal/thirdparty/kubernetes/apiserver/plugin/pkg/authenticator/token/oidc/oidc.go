@@ -429,6 +429,7 @@ func New(lifecycleCtx context.Context, opts Options) (AuthenticatorTokenWithHeal
 		err: fmt.Errorf("oidc: authenticator for issuer %q is not initialized", authn.jwtAuthenticator.Issuer.URL),
 	})
 
+	// MODIFICATION: Create a new external claims resolver if external claim sources are configured.
 	if len(opts.JWTAuthenticator.ExternalClaimsSources) > 0 {
 		externalSourceResolver, err := NewExternalClaimsResolver(compiler, opts.JWTAuthenticator.ExternalClaimsSources...)
 		if err != nil {
@@ -908,6 +909,8 @@ func (a *jwtAuthenticator) AuthenticateToken(ctx context.Context, token string) 
 		}
 	}
 
+	// MODIFICATION: If an externalSourceResolver is present for this provider
+	// perform the external claim resolution
 	if a.externalSourceResolver != nil {
 		a.externalSourceResolver.expand(ctx, token, c)
 	}
@@ -1276,6 +1279,10 @@ func convertCELValueToStringList(val ref.Val) ([]string, error) {
 				}
 				result = append(result, out)
 			}
+		// MODIFICATION: Add []string case
+		// This was noticed as being necessary when testing external claim source
+		// resolution for a Keycloak UserInfo endpoint sourced claim that was used
+		// in a claim mapping evaluation.
 		case []string:
 			result = val.Value().([]string)
 		case []ref.Val:

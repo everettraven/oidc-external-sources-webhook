@@ -158,6 +158,7 @@ type ExternalClaimsSource struct {
 	TLS            TLS
 	URL            SourceURL
 	Mappings       []SourcedClaimMapping
+	Conditions     []ExternalSourceCondition
 }
 
 type TLS struct {
@@ -181,5 +182,9 @@ type SourceURL struct {
 
 type SourcedClaimMapping struct {
 	Name       string
+	Expression string
+}
+
+type ExternalSourceCondition struct {
 	Expression string
 }

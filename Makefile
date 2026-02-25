@@ -85,6 +85,8 @@ $${KEYCLOAK_CERTIFICATE_AUTHORITY}
       mappings:
         - name: groups
           expression: "response.groups.join(',')"
+	  conditions:
+	    - expression: "!has(claims.groups)"
 endef
 export CONFIG_TEMPLATE
 

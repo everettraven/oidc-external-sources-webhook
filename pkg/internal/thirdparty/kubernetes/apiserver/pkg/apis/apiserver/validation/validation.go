@@ -69,7 +69,7 @@ func ValidateAuthenticationConfiguration(compiler authenticationcel.Compiler, c 
 	seenDiscoveryURLs := sets.New[string]()
 	for i, a := range c.JWT {
 		fldPath := root.Index(i)
-		_, errs := validateJWTAuthenticator(compiler, a, fldPath, sets.New(disallowedIssuers...), utilfeature.DefaultFeatureGate.Enabled(features.StructuredAuthenticationConfiguration), utilfeature.DefaultFeatureGate.Enabled(features.StructuredAuthenticationConfigurationEgressSelector))
+		_, errs := validateJWTAuthenticator(compiler, a, fldPath, sets.New(disallowedIssuers...))
 		allErrs = append(allErrs, errs...)
 
 		if seenIssuers.Has(a.Issuer.URL) {
@@ -92,10 +92,10 @@ func ValidateAuthenticationConfiguration(compiler authenticationcel.Compiler, c 
 // CEL expressions for claim mappings and validation rules.
 // This is exported for use in oidc package.
 func CompileAndValidateJWTAuthenticator(compiler authenticationcel.Compiler, authenticator api.JWTAuthenticator, disallowedIssuers []string) (authenticationcel.CELMapper, field.ErrorList) {
-	return validateJWTAuthenticator(compiler, authenticator, nil, sets.New(disallowedIssuers...), utilfeature.DefaultFeatureGate.Enabled(features.StructuredAuthenticationConfiguration), utilfeature.DefaultFeatureGate.Enabled(features.StructuredAuthenticationConfigurationEgressSelector))
+	return validateJWTAuthenticator(compiler, authenticator, nil, sets.New(disallowedIssuers...))
 }
 
-func validateJWTAuthenticator(compiler authenticationcel.Compiler, authenticator api.JWTAuthenticator, fldPath *field.Path, disallowedIssuers sets.Set[string], structuredAuthnFeatureEnabled, structuredAuthnEgressSelectorFeatureEnabled bool) (authenticationcel.CELMapper, field.ErrorList) {
+func validateJWTAuthenticator(compiler authenticationcel.Compiler, authenticator api.JWTAuthenticator, fldPath *field.Path, disallowedIssuers sets.Set[string]) (authenticationcel.CELMapper, field.ErrorList) {
 	var allErrs field.ErrorList
 
 	state := &validationState{}
@@ -673,6 +673,7 @@ func convertCELErrorToValidationError(fldPath *field.Path, expression string, er
 // MODIFICATION: Validation functions for validating externalClaimsSources
 func validateExternalClaimSources(compiler authenticationcel.Compiler, state *validationState, externalClaimsSources []api.ExternalClaimsSource, fldPath *field.Path, structuredAuthnFeatureEnabled bool) field.ErrorList {
 	// TODO: implement
+	
 	return nil
 }
 

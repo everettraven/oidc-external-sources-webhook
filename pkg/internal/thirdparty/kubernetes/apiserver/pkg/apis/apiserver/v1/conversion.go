@@ -114,6 +114,7 @@ func Convert_v1_ExternalClaimsSource_To_apiserver_ExternalClaimsSource(in *Exter
 	}
 
 	out.Mappings = *(*[]apiserver.SourcedClaimMapping)(unsafe.Pointer(&in.Mappings))
+	out.Conditions = *(*[]apiserver.ExternalSourceCondition)(unsafe.Pointer(&in.Conditions))
 
 	return nil
 }

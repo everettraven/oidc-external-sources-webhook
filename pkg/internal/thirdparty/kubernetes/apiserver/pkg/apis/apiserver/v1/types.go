@@ -387,8 +387,6 @@ type UserValidationRule struct {
 }
 
 // MODIFICATIONS: New types for external claims sourcing.
-//
-// TODO: Add validations for these types/fields.
 
 type ExternalClaimsSource struct {
 	// authentication is a required field that configures how the
@@ -402,12 +400,21 @@ type ExternalClaimsSource struct {
 	// url is a required configuration of the URL
 	// for which the external claims are located.
 	// +required
-	URL      SourceURL `json:"url,omitzero"`
+	URL SourceURL `json:"url,omitzero"`
 	// mappings is a required list of the claim
 	// and response handling expression pairs
 	// that produces the claims from the external source.
 	// +required
 	Mappings []SourcedClaimMapping `json:"mappings,omitempty"`
+	// conditions is an optional list of conditions in
+	// which claims should attempt to be fetched from this
+	// external source.
+	// When omitted, claims are always attempted to be fetched
+	// from this external source.
+	// When specified, all conditions must evaluate to 'true'
+	// before claims are attempted to be fetched from this external source.
+	// +optional
+	Conditions []ExternalSourceCondition `json:"conditions,omitempty"`
 }
 
 type TLS struct {
@@ -440,7 +447,7 @@ const (
 type SourceURL struct {
 	// hostname is a required hostname for which the external claims are located.
 	// +required
-	Hostname           string `json:"hostname,omitempty"`
+	Hostname string `json:"hostname,omitempty"`
 	// pathExpression is a required CEL expression that returns a list
 	// of string values used to construct the URL path.
 	// Claims from the token used for the request to the kube-apiserver
@@ -454,13 +461,26 @@ type SourcedClaimMapping struct {
 	// will be produced and made available during
 	// the claim-to-identity mapping process.
 	// +required
-	Name       string `json:"name,omitempty"`
+	Name string `json:"name,omitempty"`
 
 	// expression is a required CEL expression that
 	// will produce a value to be assigned to the claim.
 	// The full response body from the request to the
 	// external claim source is provided via the
 	// `response` variable.
+	// +required
+	Expression string `json:"expression,omitempty"`
+}
+
+type ExternalSourceCondition struct {
+	// expression is a required CEL expression that
+	// is used to determine whether or not an external
+	// source should be used to fetch external claims.
+	// The expression must return a boolean value,
+	// where true means that the source should be consulted
+	// and false means that it should not.
+	// Claims from the token used for the request to the kube-apiserver
+	// are made available via the `claims` variable.
 	// +required
 	Expression string `json:"expression,omitempty"`
 }
