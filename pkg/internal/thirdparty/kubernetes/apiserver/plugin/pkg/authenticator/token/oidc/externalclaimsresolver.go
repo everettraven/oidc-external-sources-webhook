@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"time"
@@ -267,19 +268,13 @@ func (ecr *externalClaimsResolver) expand(ctx context.Context, token string, c c
 			klog.Errorf("external claims resolver: received a %d status code when fetching external claims: response body: %s ", resp.StatusCode, string(responseBody))
 			continue
 		}
-
 		externalClaims, err := getClaimsFromResponse(ctx, resp, source.mapper.Sources)
-		for k, v := range externalClaims {
-			fmt.Println("key", k, "value", string(v))
-		}
 		if err != nil {
 			klog.Errorf("external claims resolver: getting claims from response: %v", err)
 			continue
 		}
 
-		for name, value := range externalClaims {
-			c[name] = value
-		}
+		maps.Copy(c, externalClaims)
 	}
 }
 

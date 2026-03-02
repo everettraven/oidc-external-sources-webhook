@@ -1,6 +1,5 @@
 /*
- NOTE: This file was copied from https://github.com/kubernetes/kubernetes/blob/master/staging/src/k8s.io/apiserver/plugin/pkg/authenticator/token/oidc/oidc.go
-based on commit https://github.com/kubernetes/kubernetes/commit/97587e951b015e6935001091748029471c2b4566
+ NOTE: This file was copied based on commit https://github.com/kubernetes/kubernetes/commit/97587e951b015e6935001091748029471c2b4566
 
 Any and all commits that modify this file will be documented below.
 
@@ -456,10 +455,6 @@ func New(lifecycleCtx context.Context, opts Options) (AuthenticatorTokenWithHeal
 
 				remoteKeySet := oidc.NewRemoteKeySet(oidc.ClientContext(lifecycleCtx, client), providerJSON.JWKSURL)
 				authn.setVerifier(&idTokenVerifier{oidc.NewVerifier(issuerURL, remoteKeySet, verifierConfig), audiences})
-				return true, nil
-
-				verifier := provider.Verifier(verifierConfig)
-				authn.setVerifier(&idTokenVerifier{verifier, audiences})
 				return true, nil
 			})
 		}()

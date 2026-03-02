@@ -1,6 +1,5 @@
 /*
- NOTE: This file was copied from https://github.com/kubernetes/kubernetes/blob/master/staging/src/k8s.io/apiserver/plugin/pkg/authenticator/token/oidc/oidc.go
-based on commit https://github.com/kubernetes/kubernetes/commit/4024390d8c8a19056ab7ced95eef5cce43c8096d
+ NOTE: This file was copied based on commit https://github.com/kubernetes/kubernetes/commit/4024390d8c8a19056ab7ced95eef5cce43c8096d
 
 Any and all commits that modify this file will be documented below.
 

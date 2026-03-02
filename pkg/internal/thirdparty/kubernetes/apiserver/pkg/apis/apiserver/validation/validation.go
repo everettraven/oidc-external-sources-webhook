@@ -531,10 +531,6 @@ func validateUserValidationRules(compiler authenticationcel.Compiler, state *val
 	var allErrs field.ErrorList
 	var compilationResults []authenticationcel.CompilationResult
 
-	if len(rules) > 0 {
-		allErrs = append(allErrs, field.Invalid(fldPath, "", "user validation rules are not supported when StructuredAuthenticationConfiguration feature gate is disabled"))
-	}
-
 	seenExpressions := sets.NewString()
 	for i, rule := range rules {
 		fldPath := fldPath.Index(i)
@@ -616,6 +612,11 @@ func convertCELErrorToValidationError(fldPath *field.Path, expression string, er
 // MODIFICATION: Validation functions for validating externalClaimsSources
 func validateExternalClaimsSources(compiler authenticationcel.Compiler, externalClaimsSources []api.ExternalClaimsSource, fldPath *field.Path) field.ErrorList {
 	allErrs := field.ErrorList{}
+
+	// TODO: Determine whether or not 5 is reasonable, too little, or too many external claim sources.
+	if len(externalClaimsSources) > 5 {
+		allErrs = append(allErrs, field.TooMany(fldPath, len(externalClaimsSources), 5))
+	}
 
 	for i, source := range externalClaimsSources {
 		allErrs = append(allErrs, validateExternalClaimsSource(compiler, source, fldPath.Index(i))...)
