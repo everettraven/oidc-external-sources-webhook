@@ -3,6 +3,10 @@
 
 Any and all commits that modify this file will be documented below.
 
+ TODO: We should make any updates to this file as necessary to move away from
+"apiserver" references if we are going to maintain a webhook based approach
+long-term.
+
 */
 /*
 Copyright 2015 The Kubernetes Authors.
@@ -33,6 +37,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"reflect"
 	"strings"
@@ -241,6 +246,17 @@ func newClaimServer(t *testing.T, keys jose.JSONWebKeySet, signer jose.Signer, c
 				t.Errorf("while serializing response token: %v", err)
 			}
 			w.Write([]byte(token))
+		// MODIFICATION: Add an endpoint to test external claims sourcing
+		case "/external":
+			if claimToResponseMap == nil {
+				t.Errorf("no claims specified in response")
+			}
+			auth := r.Header.Get("Authorization")
+			// allow any token in the Authorization header
+			if auth == "" {
+				t.Error("bearer token expected but was empty")
+			}
+			w.Write([]byte(claimToResponseMap["external"]))
 		default:
 			w.WriteHeader(http.StatusNotFound)
 			fmt.Fprintf(w, "unexpected URL: %v", r.URL)
@@ -292,12 +308,22 @@ func (c *claimsTest) run(t *testing.T) {
 	// Allow claims to refer to the serving URL of the test server.  For this,
 	// substitute all references to {{.URL}} in appropriate places.
 	// Use {{.Expired}} to handle the token expiry date string with correct timezone handling.
+	// MODIFICATION: use {{.Hostname}} to inject the URL hostname.
+	// MODIFICATION: use {{.CACert}} to inject CA certificate.
+	parsedURL, err := url.Parse(ts.URL)
+	if err != nil {
+		t.Fatalf("test server URL %q failed to parse as a URL: %v", ts.URL, err)
+	}
 	v := struct {
 		URL     string
 		Expired string
+		Hostname string
+		CACert string
 	}{
 		URL:     ts.URL,
 		Expired: fmt.Sprintf("%v", time.Unix(expired.Unix(), 0)),
+		Hostname: fmt.Sprintf("%s:%s", parsedURL.Hostname(), parsedURL.Port()),
+		CACert: string(caBundle),
 	}
 	c.claims = replace(c.claims, &v)
 	c.openIDConfig = replace(c.openIDConfig, &v)
@@ -316,6 +342,12 @@ func (c *claimsTest) run(t *testing.T) {
 
 	if c.optsFunc != nil {
 		c.optsFunc(&c.options)
+	}
+
+	// MODIFICATION: Add replacements for external claim sources values
+	for i := range c.options.JWTAuthenticator.ExternalClaimsSources {
+		c.options.JWTAuthenticator.ExternalClaimsSources[i].URL.Hostname = replace(c.options.JWTAuthenticator.ExternalClaimsSources[i].URL.Hostname, &v)
+		c.options.JWTAuthenticator.ExternalClaimsSources[i].TLS.CA = replace(c.options.JWTAuthenticator.ExternalClaimsSources[i].TLS.CA, &v)
 	}
 
 	expectInitErr := len(c.wantInitErr) > 0
@@ -4153,6 +4185,71 @@ func TestToken(t *testing.T) {
 			}`, valid.Unix()),
 			wantErr: `oidc: error evaluating user info validation rule: validation expression '!(user.extra[?'authentication.kubernetes.io/credential-id'][0].orValue('') in ["JTI=ea28ed49-2e11-4280-9ec5-bc3d1d84661a"])' failed: credential is revoked`,
 		},
+		// MODIFICATION: Add unit tests for externally sourced claims
+		{
+			name: "externally sourced claims used for establishing a users groups",
+			options: Options{
+				JWTAuthenticator: apiserver.JWTAuthenticator{
+					Issuer: apiserver.Issuer{
+						URL:       "https://auth.example.com",
+						Audiences: []string{"my-client"},
+					},
+					ClaimMappings: apiserver.ClaimMappings{
+						Username: apiserver.PrefixedClaimOrExpression{
+							Expression: "claims.username",
+						},
+						Groups: apiserver.PrefixedClaimOrExpression{
+							Expression: "claims.groups.split(',')",
+						},
+					},
+					ExternalClaimsSources: []apiserver.ExternalClaimsSource{
+						{
+							Authentication: &apiserver.Authentication{
+								Type: apiserver.AuthenticationTypeRequestProvidedToken,
+							},
+							URL: &apiserver.SourceURL{
+								Hostname: "{{.Hostname}}",
+								PathExpression: "['external']",
+							},
+							Mappings: []apiserver.SourcedClaimMapping{
+								{
+									Name: "groups",
+									Expression: "response.groups.join(',')",
+								},
+							},
+							TLS: &apiserver.TLS{
+								CA: "{{.CACert}}",
+							},
+						},
+					},
+				},
+				now: func() time.Time { return now },
+			},
+			signingKey: loadRSAPrivKey(t, "testdata/rsa_1.pem", jose.RS256),
+			pubKeys: []*jose.JSONWebKey{
+				loadRSAKey(t, "testdata/rsa_1.pem", jose.RS256),
+			},
+			claims: fmt.Sprintf(`{
+				"iss": "https://auth.example.com",
+				"aud": "my-client",
+				"username": "jane",
+				"exp": %d
+			}`, valid.Unix()),
+			claimToResponseMap: map[string]string{
+				"external": `{
+				  "groups": ["one", "two", "three"]
+			    }`,
+			},
+			want: &user.DefaultInfo{
+				Name: "jane",
+				Groups: []string{
+					"one",
+					"two",
+					"three",
+				},
+			},
+		},
+		// TODO: Add more tests here
 	}
 
 	var successTestCount, failureTestCount int

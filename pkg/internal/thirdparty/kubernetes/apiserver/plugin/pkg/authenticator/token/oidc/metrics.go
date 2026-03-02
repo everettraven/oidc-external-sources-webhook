@@ -41,6 +41,9 @@ const (
 	subsystem = "authentication"
 )
 
+// TODO: If we go with the webhook approach longer term, we should probably overhaul these metrics
+// to ensure that we aren't just duplicating API server metrics and align them with the webhook
+// instead of an apiserver.
 var (
 	jwtAuthenticatorLatencyMetric = metrics.NewHistogramVec(
 		&metrics.HistogramOpts{

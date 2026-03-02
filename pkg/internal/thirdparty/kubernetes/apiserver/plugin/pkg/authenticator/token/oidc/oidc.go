@@ -405,7 +405,7 @@ func New(lifecycleCtx context.Context, opts Options) (AuthenticatorTokenWithHeal
 	if len(opts.JWTAuthenticator.ExternalClaimsSources) > 0 {
 		externalSourceResolver, err := NewExternalClaimsResolver(compiler, opts.JWTAuthenticator.ExternalClaimsSources...)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("building new external claims resolver: %w", err)
 		}
 
 		authn.externalSourceResolver = externalSourceResolver
