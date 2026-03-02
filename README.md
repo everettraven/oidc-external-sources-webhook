@@ -22,81 +22,32 @@ This quick start is specifically for development purposes.
 git clone github.com/everettraven/oidc-external-sources-webhook.git
 ```
 
-### Build the webhook container image
+### /etc/hosts configuration
+Because everything is run as containers on the `kind` network and Keycloak
+doesn't dynamically modify the frontend url based on how it was accessed,
+you'll need to add an `/etc/hosts` entry that matches:
+
+```
+127.0.0.1 keycloak
+```
+
+### Start everything
 ```sh
-podman build -t {tag} -f Dockerfile .
+make image up
 ```
 
-### Setup Keycloak
-
-1. Create self-signed certificate for Keycloak
-
-```sh
-openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -sha256 -days 365 -nodes
-```
-
-> [!NOTE]
-> Make sure to set the Common Name (CN) to `keycloak`
-
-2. Run Keycloak with self-signed certificate
-
-```sh
-podman run --rm --name keycloak -p 127.0.0.1:8080:8443 --network=kind \
-        -e KC_BOOTSTRAP_ADMIN_USERNAME=admin -e KC_BOOTSTRAP_ADMIN_PASSWORD=change_me \
-        -e KC_HTTPS_CERTIFICATE_FILE=/certs/cert.pem -e KC_HTTPS_CERTIFICATE_KEY_FILE=/certs/key.pem \
-        -v $(pwd)/cert.pem:/certs/cert.pem -v $(pwd)/key.pem:/certs/key.pem\
-        quay.io/keycloak/keycloak:latest \
-        start-dev
-```
-
-3. Configure a new Keycloak realm and client
-
-> [!NOTE]
-> Make sure to set the Frontend URL for the realm to `https://keycloak:8443`
-
-4. Add a new user to the realm
-
-### Run the webhook container on the `kind` network
-
-1. Create the configuration file. An example:
-
-```yaml
-apiVersion: everettraven.github.io/v1alpha1
-kind: AuthenticationConfiguration
-jwt:
-  - issuer:
-      url: https://keycloak:8443/realms/k8s
-      audiences:
-        - k8s-client
-      certificateAuthority: |
-          -----BEGIN CERTIFICATE-----
-          <certificate data, omitted to avoid security scan issues>
-          -----END CERTIFICATE-----
-    claimMappings:
-      username:
-       claim: "preferred_username"
-       prefix: ""
-      groups:
-        claim: "groups"
-        prefix: ""
-```
-
-```sh
-podman run --rm --name authnwebhook -d --network=kind -v $(pwd)/keycloak-config.yaml:/cfg/keycloak-config.yaml {tag} --config=/cfg/keycloak-config.yaml
-```
-
-### Create the KinD cluster
-```sh
-kind create cluster --config kind-config.yaml
-```
+This will build the webhook image locally and spin up:
+- A containerized and pre-configured Keycloak instance with:
+    - Admin user with username + password of `admin`
+    - A realm, `k8s`, with a user `testuser` (password `test`) who is a member of groups `one` and `two`
+    - A public client for the realm with client-id `k8-client`
+- A containerized instance of the webhook
+- A KinD cluster configured with the webhook authenticator
+- A temporary container executing the device code OAuth2 flow to obtain a token for authenticating against the cluster
 
 ### Update `kubeconfig` with new token-based context
 
-1. Fetch token for user:
-
-```sh
-curl -k --data "grant_type=password&client_id={CLIENT_ID}&client_secret={CLIENT_SECRET}&username={USERNAME}&password={PASSWORD}" https://127.0.0.1:8080/realms/{realm}/protocol/openid-connect/token
-```
+1. Follow the device code flow steps to get the token (it will be printed to `stdout`)
 
 2. Update `kubeconfig` with new token-based context using the fetched token. As an example:
 
@@ -127,11 +78,18 @@ to a cluster identity.
 kubectl auth whoami
 ```
 
+> [!NOTE]
+> By default, this new user will have no permissions on the cluster.
+> If you'd like to experiment with assigning permissions to this user
+> and performing actions as this user, you will need to switch your
+> context back to the `kind-kind` context and give the new user
+> permissions by creating the appropriate RBAC resources.
+
 Output should look something like:
 
 ```sh
 ATTRIBUTE                                           VALUE
-Username                                            bpalmer
-Groups                                              [openshift openshift-auth system:authenticated]
+Username                                            testuser
+Groups                                              [one two system:authenticated]
 Extra: authentication.kubernetes.io/credential-id   [JTI=onrtro:81c6b4a1-0a37-fbcd-fe68-5cce2832ed91]
 ```

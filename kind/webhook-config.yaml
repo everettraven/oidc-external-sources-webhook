@@ -3,7 +3,7 @@ kind: Config
 
 clusters:
 - cluster:
-    server: http://authnwebhook:8080/authenticate
+    server: http://padlok:8080/authenticate
   name: remote-authn
 
 users:

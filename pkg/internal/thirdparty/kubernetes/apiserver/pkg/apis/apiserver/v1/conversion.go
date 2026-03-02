@@ -1,3 +1,5 @@
+// TODO: Should wire up conversion-gen to automatically create conversion methods instead of hand-writing
+// new conversions
 package v1
 
 import (
@@ -38,6 +40,19 @@ func Convert_v1_JWTAuthenticator_To_apiserver_JWTAuthenticator(in *JWTAuthentica
 	out.ClaimValidationRules = *(*[]apiserver.ClaimValidationRule)(unsafe.Pointer(&in.ClaimValidationRules))
 	out.UserValidationRules = *(*[]apiserver.UserValidationRule)(unsafe.Pointer(&in.UserValidationRules))
 
+	outECS := []apiserver.ExternalClaimsSource{}
+	for _, inEC := range in.ExternalClaimsSources {
+		outEC := &apiserver.ExternalClaimsSource{}
+		err := Convert_v1_ExternalClaimsSource_To_apiserver_ExternalClaimsSource(&inEC, outEC)
+		if err != nil {
+			return fmt.Errorf("converting external claims source: %w", err)
+		}
+
+		outECS = append(outECS, *outEC)
+	}
+
+	out.ExternalClaimsSources = outECS
+
 	return nil
 }
 
@@ -76,6 +91,68 @@ func Convert_v1_Issuer_To_apiserver_Issuer(in *Issuer, out *apiserver.Issuer) er
 	out.CertificateAuthority = in.CertificateAuthority
 	out.Audiences = *(*[]string)(unsafe.Pointer(&in.Audiences))
 	out.AudienceMatchPolicy = apiserver.AudienceMatchPolicyType(in.AudienceMatchPolicy)
-	out.EgressSelectorType = apiserver.EgressSelectorType(in.EgressSelectorType)
+	return nil
+}
+
+func Convert_v1_ExternalClaimsSource_To_apiserver_ExternalClaimsSource(in *ExternalClaimsSource, out *apiserver.ExternalClaimsSource) error {
+	if in == nil {
+		in = &ExternalClaimsSource{}
+	}
+	if out == nil {
+		out = &apiserver.ExternalClaimsSource{}
+	}
+
+	if err := Convert_v1_Authentication_To_apiserver_Authentication(in.Authentication, &out.Authentication); err != nil {
+		return err
+	}
+
+	if err := Convert_v1_TLS_To_apiserver_TLS(in.TLS, &out.TLS); err != nil {
+		return err
+	}
+
+	if err := Convert_v1_SourceURL_To_apiserver_SourceURL(in.URL, &out.URL); err != nil {
+		return err
+	}
+
+	out.Mappings = *(*[]apiserver.SourcedClaimMapping)(unsafe.Pointer(&in.Mappings))
+	out.Conditions = *(*[]apiserver.ExternalSourceCondition)(unsafe.Pointer(&in.Conditions))
+
+	return nil
+}
+
+func Convert_v1_SourceURL_To_apiserver_SourceURL(in *SourceURL, out **apiserver.SourceURL) error {
+	if in == nil {
+		return nil
+	}
+
+	outTemp := &apiserver.SourceURL{}
+
+	outTemp.Hostname = in.Hostname
+	outTemp.PathExpression = in.PathExpression
+	*out = outTemp
+	return nil
+}
+
+func Convert_v1_Authentication_To_apiserver_Authentication(in *Authentication, out **apiserver.Authentication) error {
+	outTemp := &apiserver.Authentication{}
+
+	// defaulting?
+	if in == nil {
+		outTemp.Type = apiserver.AuthenticationTypeRequestProvidedToken
+		return nil
+	}
+
+	outTemp.Type = apiserver.AuthenticationType(in.Type)
+	*out = outTemp
+	return nil
+}
+
+func Convert_v1_TLS_To_apiserver_TLS(in *TLS, out **apiserver.TLS) error {
+	if in == nil {
+		return nil
+	}
+	outTemp := &apiserver.TLS{}
+	outTemp.CA = in.CA
+	*out = outTemp
 	return nil
 }

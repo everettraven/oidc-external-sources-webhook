@@ -44,6 +44,9 @@ type JWTAuthenticator struct {
 	ClaimValidationRules []ClaimValidationRule
 	ClaimMappings        ClaimMappings
 	UserValidationRules  []UserValidationRule
+
+	// MODIFICATION: Add a field for external claims sourcing configuration
+	ExternalClaimsSources []ExternalClaimsSource
 }
 
 // Issuer provides the configuration for an external provider's specific settings.
@@ -86,7 +89,6 @@ type Issuer struct {
 	CertificateAuthority string
 	Audiences            []string
 	AudienceMatchPolicy  AudienceMatchPolicyType
-	EgressSelectorType   EgressSelectorType
 }
 
 // AudienceMatchPolicyType is a set of valid values for Issuer.AudienceMatchPolicy
@@ -95,14 +97,6 @@ type AudienceMatchPolicyType string
 // Valid types for AudienceMatchPolicyType
 const (
 	AudienceMatchPolicyMatchAny AudienceMatchPolicyType = "MatchAny"
-)
-
-type EgressSelectorType string
-
-const (
-	EgressSelectorControlPlane EgressSelectorType = "controlplane"
-
-	EgressSelectorCluster EgressSelectorType = "cluster"
 )
 
 // ClaimValidationRule provides the configuration for a single claim validation rule.
@@ -146,4 +140,42 @@ type ExtraMapping struct {
 type UserValidationRule struct {
 	Expression string
 	Message    string
+}
+
+// MODIFICATIONS: New types for external claims sourcing.
+
+type ExternalClaimsSource struct {
+	Authentication *Authentication
+	TLS            *TLS
+	URL            *SourceURL
+	Mappings       []SourcedClaimMapping
+	Conditions     []ExternalSourceCondition
+}
+
+type TLS struct {
+	CA string
+}
+
+type Authentication struct {
+	Type AuthenticationType
+}
+
+type AuthenticationType string
+
+const (
+	AuthenticationTypeRequestProvidedToken AuthenticationType = "RequestProvidedToken"
+)
+
+type SourceURL struct {
+	Hostname       string
+	PathExpression string
+}
+
+type SourcedClaimMapping struct {
+	Name       string
+	Expression string
+}
+
+type ExternalSourceCondition struct {
+	Expression string
 }

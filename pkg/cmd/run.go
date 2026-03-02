@@ -3,22 +3,22 @@ package cmd
 import (
 	"log"
 
-	"github.com/everettraven/oidc-external-sources-webhook/pkg/authenticator"
+	"github.com/everettraven/oidc-external-sources-webhook/pkg/authenticator/jwt"
 	"github.com/everettraven/oidc-external-sources-webhook/pkg/server"
 	"github.com/spf13/cobra"
 )
 
 func NewRunCommand() *cobra.Command {
-	jwt := authenticator.NewJWT()
-	srv := server.New(jwt)
+	authn := jwt.New()
+	srv := server.New(authn)
 
 	cmd := &cobra.Command{
 		Use: "run",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			go func() {
-				err := jwt.Run(cmd.Context())
+				err := authn.Run(cmd.Context())
 				if err != nil {
-					log.Fatalf("jwt.Run error", err)
+					log.Fatalf("jwt.Run error: %v", err)
 				}
 			}()
 
@@ -27,7 +27,7 @@ func NewRunCommand() *cobra.Command {
 	}
 
 	srv.AddFlags(cmd.Flags())
-	jwt.AddFlags(cmd.Flags())
+	authn.AddFlags(cmd.Flags())
 
 	return cmd
 }

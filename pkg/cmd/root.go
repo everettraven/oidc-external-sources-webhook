@@ -8,6 +8,7 @@ func NewRootCommand() *cobra.Command {
 	}
 
 	cmd.AddCommand(NewRunCommand())
+	cmd.AddCommand(NewOAuthCommand())
 
 	return cmd
 }

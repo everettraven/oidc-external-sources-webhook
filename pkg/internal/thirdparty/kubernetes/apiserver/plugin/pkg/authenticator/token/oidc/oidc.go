@@ -1,6 +1,5 @@
 /*
- NOTE: This file was copied from https://github.com/kubernetes/kubernetes/blob/master/staging/src/k8s.io/apiserver/plugin/pkg/authenticator/token/oidc/oidc.go
-based on commit https://github.com/kubernetes/kubernetes/commit/97587e951b015e6935001091748029471c2b4566
+ NOTE: This file was copied based on commit https://github.com/kubernetes/kubernetes/commit/97587e951b015e6935001091748029471c2b4566
 
 Any and all commits that modify this file will be documented below.
 
@@ -63,30 +62,26 @@ import (
 	"k8s.io/apimachinery/pkg/util/net"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/wait"
+
 	// MODIFICATION: Remapping to copied API representation
 	// "k8s.io/apiserver/pkg/apis/apiserver"
 	"github.com/everettraven/oidc-external-sources-webhook/pkg/internal/thirdparty/kubernetes/apiserver/pkg/apis/apiserver"
 	// MODIFICATION: Remapping to copied validation package
 	// apiservervalidation "k8s.io/apiserver/pkg/apis/apiserver/validation"
 	apiservervalidation "github.com/everettraven/oidc-external-sources-webhook/pkg/internal/thirdparty/kubernetes/apiserver/pkg/apis/apiserver/validation"
+	authenticationcel "github.com/everettraven/oidc-external-sources-webhook/pkg/internal/thirdparty/kubernetes/apiserver/pkg/authentication/cel"
 	"k8s.io/apiserver/pkg/authentication/authenticator"
-	authenticationcel "k8s.io/apiserver/pkg/authentication/cel"
 	authenticationtokenjwt "k8s.io/apiserver/pkg/authentication/token/jwt"
 	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/apiserver/pkg/cel"
 	"k8s.io/apiserver/pkg/cel/lazy"
-	"k8s.io/apiserver/pkg/features"
-	"k8s.io/apiserver/pkg/server/egressselector"
-	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	certutil "k8s.io/client-go/util/cert"
 	"k8s.io/klog/v2"
 )
 
-var (
-	// synchronizeTokenIDVerifierForTest should be set to true to force a
-	// wait until the token ID verifiers are ready.
-	synchronizeTokenIDVerifierForTest = false
-)
+// synchronizeTokenIDVerifierForTest should be set to true to force a
+// wait until the token ID verifiers are ready.
+var synchronizeTokenIDVerifierForTest = false
 
 const (
 	wellKnownEndpointPath = "/.well-known/openid-configuration"
@@ -106,9 +101,6 @@ type Options struct {
 
 	// PEM encoded root certificate contents of the provider.  Mutually exclusive with Client.
 	CAContentProvider CAContentProvider
-
-	// EgressLookup allows for optional opt-in egress configuration via a custom dialer.  Mutually exclusive with Client.
-	EgressLookup egressselector.Lookup
 
 	// Optional http.Client used to make all requests to the remote issuer.  Mutually exclusive with CAContentProvider and EgressLookup.
 	Client *http.Client
@@ -228,6 +220,10 @@ type jwtAuthenticator struct {
 	requiredClaims map[string]string
 
 	healthCheck atomic.Pointer[errorHolder]
+
+	// MODIFICATION: an external claims source resolver is
+	// used to resolve claims from configured external sources
+	externalSourceResolver *externalClaimsResolver
 }
 
 // idTokenVerifier is a wrapper around oidc.IDTokenVerifier. It uses the oidc.IDTokenVerifier
@@ -308,10 +304,6 @@ func New(lifecycleCtx context.Context, opts Options) (AuthenticatorTokenWithHeal
 		return nil, fmt.Errorf("oidc: Client and CAContentProvider are mutually exclusive")
 	}
 
-	if opts.Client != nil && opts.EgressLookup != nil {
-		return nil, fmt.Errorf("oidc: Client and EgressLookup are mutually exclusive")
-	}
-
 	client := opts.Client
 
 	if client == nil {
@@ -327,25 +319,8 @@ func New(lifecycleCtx context.Context, opts Options) (AuthenticatorTokenWithHeal
 			klog.Info("OIDC: No x509 certificates provided, will use host's root CA set")
 		}
 
-		var customDial net.DialFunc
-		switch et := opts.JWTAuthenticator.Issuer.EgressSelectorType; et {
-		case "":
-			// valid but nothing to do
-		case apiserver.EgressSelectorControlPlane:
-			customDial, err = egressLookupForType(opts.EgressLookup, egressselector.ControlPlane)
-		case apiserver.EgressSelectorCluster:
-			customDial, err = egressLookupForType(opts.EgressLookup, egressselector.Cluster)
-		default:
-			// this should be impossible as validation should catch this at an earlier point
-			return nil, fmt.Errorf("oidc: unknown egress selector type %q", et)
-		}
-		if err != nil {
-			return nil, err
-		}
-
 		// Copied from http.DefaultTransport.
 		tr := net.SetTransportDefaults(&http.Transport{
-			DialContext: customDial,
 			// According to golang's doc, if RootCAs is nil,
 			// TLS uses the host's root CA set.
 			TLSClientConfig: &tls.Config{RootCAs: roots, InsecureSkipVerify: true},
@@ -426,6 +401,16 @@ func New(lifecycleCtx context.Context, opts Options) (AuthenticatorTokenWithHeal
 		err: fmt.Errorf("oidc: authenticator for issuer %q is not initialized", authn.jwtAuthenticator.Issuer.URL),
 	})
 
+	// MODIFICATION: Create a new external claims resolver if external claim sources are configured.
+	if len(opts.JWTAuthenticator.ExternalClaimsSources) > 0 {
+		externalSourceResolver, err := NewExternalClaimsResolver(compiler, opts.JWTAuthenticator.ExternalClaimsSources...)
+		if err != nil {
+			return nil, fmt.Errorf("building new external claims resolver: %w", err)
+		}
+
+		authn.externalSourceResolver = externalSourceResolver
+	}
+
 	issuerURL := opts.JWTAuthenticator.Issuer.URL
 	if opts.KeySet != nil {
 		// We already have a key set, synchronously initialize the verifier.
@@ -449,55 +434,33 @@ func New(lifecycleCtx context.Context, opts Options) (AuthenticatorTokenWithHeal
 					return false, nil
 				}
 
-				if utilfeature.DefaultFeatureGate.Enabled(features.StructuredAuthenticationConfigurationJWKSMetrics) {
-					providerJSON := &struct {
-						JWKSURL string `json:"jwks_uri"`
-					}{}
+				providerJSON := &struct {
+					JWKSURL string `json:"jwks_uri"`
+				}{}
 
-					if err := provider.Claims(providerJSON); err != nil {
-						klog.Errorf("oidc authenticator: error getting JWKS URL: %v", err)
-						authn.healthCheck.Store(&errorHolder{err: err})
-						return false, nil
-					}
-					if len(providerJSON.JWKSURL) == 0 {
-						klog.Errorf("provider did not return JWKS URL")
-						authn.healthCheck.Store(&errorHolder{err: fmt.Errorf("provider did not return JWKS URL")})
-						return false, nil
-					}
-
-					clientWithJWKSMetrics := *client
-					clientWithJWKSMetrics.Transport = withMetricsRoundTripper(client.Transport, providerJSON.JWKSURL, issuerURL, opts.APIServerID, lifecycleCtx)
-					client = &clientWithJWKSMetrics
-
-					remoteKeySet := oidc.NewRemoteKeySet(oidc.ClientContext(lifecycleCtx, client), providerJSON.JWKSURL)
-					authn.setVerifier(&idTokenVerifier{oidc.NewVerifier(issuerURL, remoteKeySet, verifierConfig), audiences})
-					return true, nil
+				if err := provider.Claims(providerJSON); err != nil {
+					klog.Errorf("oidc authenticator: error getting JWKS URL: %v", err)
+					authn.healthCheck.Store(&errorHolder{err: err})
+					return false, nil
+				}
+				if len(providerJSON.JWKSURL) == 0 {
+					klog.Errorf("provider did not return JWKS URL")
+					authn.healthCheck.Store(&errorHolder{err: fmt.Errorf("provider did not return JWKS URL")})
+					return false, nil
 				}
 
-				verifier := provider.Verifier(verifierConfig)
-				authn.setVerifier(&idTokenVerifier{verifier, audiences})
+				clientWithJWKSMetrics := *client
+				clientWithJWKSMetrics.Transport = withMetricsRoundTripper(client.Transport, providerJSON.JWKSURL, issuerURL, opts.APIServerID, lifecycleCtx)
+				client = &clientWithJWKSMetrics
+
+				remoteKeySet := oidc.NewRemoteKeySet(oidc.ClientContext(lifecycleCtx, client), providerJSON.JWKSURL)
+				authn.setVerifier(&idTokenVerifier{oidc.NewVerifier(issuerURL, remoteKeySet, verifierConfig), audiences})
 				return true, nil
 			})
 		}()
 	}
 
 	return newInstrumentedAuthenticator(issuerURL, authn), nil
-}
-
-func egressLookupForType(egressLookup egressselector.Lookup, egressSelector egressselector.EgressType) (net.DialFunc, error) {
-	if egressLookup == nil {
-		return nil, fmt.Errorf("oidc: egress lookup required with egress selector type %q", egressSelector)
-	}
-	customDial, err := egressLookup(egressSelector.AsNetworkContext())
-	if err != nil {
-		return nil, fmt.Errorf("oidc: egress lookup for %q failed: %w", egressSelector, err)
-	}
-	// we are stricter than other egress lookups because this is opt-in config
-	// we expect the user who is configuring the JWT authenticator to keep it in sync with the egress configuration
-	if customDial == nil {
-		return nil, fmt.Errorf("oidc: egress lookup for %q is not configured", egressSelector)
-	}
-	return customDial, nil
 }
 
 type errorHolder struct {
@@ -896,6 +859,12 @@ func (a *jwtAuthenticator) AuthenticateToken(ctx context.Context, token string) 
 		}
 	}
 
+	// MODIFICATION: If an externalSourceResolver is present for this provider
+	// perform the external claim resolution
+	if a.externalSourceResolver != nil {
+		a.externalSourceResolver.expand(ctx, token, c)
+	}
+
 	var claimsValue *lazy.MapValue
 	// Convert the claims to traits.Mapper so that we can evaluate the CEL expressions
 	// against the claims. This is done once here so that we don't have to convert
@@ -1260,6 +1229,12 @@ func convertCELValueToStringList(val ref.Val) ([]string, error) {
 				}
 				result = append(result, out)
 			}
+		// MODIFICATION: Add []string case
+		// This was noticed as being necessary when testing external claim source
+		// resolution for a Keycloak UserInfo endpoint sourced claim that was used
+		// in a claim mapping evaluation.
+		case []string:
+			result = val.Value().([]string)
 		case []ref.Val:
 			for _, v := range val.Value().([]ref.Val) {
 				out, ok := v.Value().(string)

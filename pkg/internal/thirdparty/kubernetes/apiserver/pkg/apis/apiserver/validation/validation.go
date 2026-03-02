@@ -31,6 +31,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 
 	celgo "github.com/google/cel-go/cel"
@@ -40,14 +41,13 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 	utilvalidation "k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
+
 	// MODIFICATION: Remapping to copied API representation
 	// api "k8s.io/apiserver/pkg/apis/apiserver"
 	api "github.com/everettraven/oidc-external-sources-webhook/pkg/internal/thirdparty/kubernetes/apiserver/pkg/apis/apiserver"
-	authenticationcel "k8s.io/apiserver/pkg/authentication/cel"
+	authenticationcel "github.com/everettraven/oidc-external-sources-webhook/pkg/internal/thirdparty/kubernetes/apiserver/pkg/authentication/cel"
 	authorizationcel "k8s.io/apiserver/pkg/authorization/cel"
 	"k8s.io/apiserver/pkg/cel"
-	"k8s.io/apiserver/pkg/features"
-	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/client-go/util/cert"
 )
 
@@ -69,7 +69,7 @@ func ValidateAuthenticationConfiguration(compiler authenticationcel.Compiler, c 
 	seenDiscoveryURLs := sets.New[string]()
 	for i, a := range c.JWT {
 		fldPath := root.Index(i)
-		_, errs := validateJWTAuthenticator(compiler, a, fldPath, sets.New(disallowedIssuers...), utilfeature.DefaultFeatureGate.Enabled(features.StructuredAuthenticationConfiguration), utilfeature.DefaultFeatureGate.Enabled(features.StructuredAuthenticationConfigurationEgressSelector))
+		_, errs := validateJWTAuthenticator(compiler, a, fldPath, sets.New(disallowedIssuers...))
 		allErrs = append(allErrs, errs...)
 
 		if seenIssuers.Has(a.Issuer.URL) {
@@ -92,18 +92,20 @@ func ValidateAuthenticationConfiguration(compiler authenticationcel.Compiler, c 
 // CEL expressions for claim mappings and validation rules.
 // This is exported for use in oidc package.
 func CompileAndValidateJWTAuthenticator(compiler authenticationcel.Compiler, authenticator api.JWTAuthenticator, disallowedIssuers []string) (authenticationcel.CELMapper, field.ErrorList) {
-	return validateJWTAuthenticator(compiler, authenticator, nil, sets.New(disallowedIssuers...), utilfeature.DefaultFeatureGate.Enabled(features.StructuredAuthenticationConfiguration), utilfeature.DefaultFeatureGate.Enabled(features.StructuredAuthenticationConfigurationEgressSelector))
+	return validateJWTAuthenticator(compiler, authenticator, nil, sets.New(disallowedIssuers...))
 }
 
-func validateJWTAuthenticator(compiler authenticationcel.Compiler, authenticator api.JWTAuthenticator, fldPath *field.Path, disallowedIssuers sets.Set[string], structuredAuthnFeatureEnabled, structuredAuthnEgressSelectorFeatureEnabled bool) (authenticationcel.CELMapper, field.ErrorList) {
+func validateJWTAuthenticator(compiler authenticationcel.Compiler, authenticator api.JWTAuthenticator, fldPath *field.Path, disallowedIssuers sets.Set[string]) (authenticationcel.CELMapper, field.ErrorList) {
 	var allErrs field.ErrorList
 
 	state := &validationState{}
 
-	allErrs = append(allErrs, validateIssuer(authenticator.Issuer, disallowedIssuers, fldPath.Child("issuer"), structuredAuthnFeatureEnabled, structuredAuthnEgressSelectorFeatureEnabled)...)
-	allErrs = append(allErrs, validateClaimValidationRules(compiler, state, authenticator.ClaimValidationRules, fldPath.Child("claimValidationRules"), structuredAuthnFeatureEnabled)...)
-	allErrs = append(allErrs, validateClaimMappings(compiler, state, authenticator.ClaimMappings, fldPath.Child("claimMappings"), structuredAuthnFeatureEnabled)...)
-	allErrs = append(allErrs, validateUserValidationRules(compiler, state, authenticator.UserValidationRules, fldPath.Child("userValidationRules"), structuredAuthnFeatureEnabled)...)
+	allErrs = append(allErrs, validateIssuer(authenticator.Issuer, disallowedIssuers, fldPath.Child("issuer"))...)
+	allErrs = append(allErrs, validateClaimValidationRules(compiler, state, authenticator.ClaimValidationRules, fldPath.Child("claimValidationRules"))...)
+	allErrs = append(allErrs, validateClaimMappings(compiler, state, authenticator.ClaimMappings, fldPath.Child("claimMappings"))...)
+	allErrs = append(allErrs, validateUserValidationRules(compiler, state, authenticator.UserValidationRules, fldPath.Child("userValidationRules"))...)
+	// MODIFICATION: Validate external claim sources
+	allErrs = append(allErrs, validateExternalClaimsSources(compiler, authenticator.ExternalClaimsSources, fldPath.Child("externalClaimsSources"))...)
 
 	return state.mapper, allErrs
 }
@@ -114,14 +116,13 @@ type validationState struct {
 	usesEmailVerifiedClaim bool
 }
 
-func validateIssuer(issuer api.Issuer, disallowedIssuers sets.Set[string], fldPath *field.Path, structuredAuthnFeatureEnabled, structuredAuthnEgressSelectorFeatureEnabled bool) field.ErrorList {
+func validateIssuer(issuer api.Issuer, disallowedIssuers sets.Set[string], fldPath *field.Path) field.ErrorList {
 	var allErrs field.ErrorList
 
 	allErrs = append(allErrs, validateIssuerURL(issuer.URL, disallowedIssuers, fldPath.Child("url"))...)
-	allErrs = append(allErrs, validateIssuerDiscoveryURL(issuer.URL, issuer.DiscoveryURL, fldPath.Child("discoveryURL"), structuredAuthnFeatureEnabled)...)
-	allErrs = append(allErrs, validateAudiences(issuer.Audiences, issuer.AudienceMatchPolicy, fldPath.Child("audiences"), fldPath.Child("audienceMatchPolicy"), structuredAuthnFeatureEnabled)...)
+	allErrs = append(allErrs, validateIssuerDiscoveryURL(issuer.URL, issuer.DiscoveryURL, fldPath.Child("discoveryURL"))...)
+	allErrs = append(allErrs, validateAudiences(issuer.Audiences, issuer.AudienceMatchPolicy, fldPath.Child("audiences"), fldPath.Child("audienceMatchPolicy"))...)
 	allErrs = append(allErrs, validateCertificateAuthority(issuer.CertificateAuthority, fldPath.Child("certificateAuthority"))...)
-	allErrs = append(allErrs, validateEgressSelector(issuer.EgressSelectorType, fldPath.Child("egressSelectorType"), structuredAuthnFeatureEnabled, structuredAuthnEgressSelectorFeatureEnabled)...)
 
 	return allErrs
 }
@@ -134,15 +135,11 @@ func validateIssuerURL(issuerURL string, disallowedIssuers sets.Set[string], fld
 	return validateURL(issuerURL, disallowedIssuers, fldPath)
 }
 
-func validateIssuerDiscoveryURL(issuerURL, issuerDiscoveryURL string, fldPath *field.Path, structuredAuthnFeatureEnabled bool) field.ErrorList {
+func validateIssuerDiscoveryURL(issuerURL, issuerDiscoveryURL string, fldPath *field.Path) field.ErrorList {
 	var allErrs field.ErrorList
 
 	if len(issuerDiscoveryURL) == 0 {
 		return nil
-	}
-
-	if !structuredAuthnFeatureEnabled {
-		allErrs = append(allErrs, field.Invalid(fldPath, issuerDiscoveryURL, "discoveryURL is not supported when StructuredAuthenticationConfiguration feature gate is disabled"))
 	}
 
 	if len(issuerURL) > 0 && strings.TrimRight(issuerURL, "/") == strings.TrimRight(issuerDiscoveryURL, "/") {
@@ -183,20 +180,16 @@ func validateURL(issuerURL string, disallowedIssuers sets.Set[string], fldPath *
 }
 
 // MODIFICATION FROM ORIGINAL: Copied from https://github.com/kubernetes/kubernetes/blob/0f4705e12e12439b37e81ea6df2318def4b4a2c5/staging/src/k8s.io/apiserver/pkg/apis/apiserver/validation/validation_encryption.go#L37C1-L38C1
-const(
-	atLeastOneRequiredErrFmt       = "at least one %s is required"
+const (
+	atLeastOneRequiredErrFmt = "at least one %s is required"
 )
 
-func validateAudiences(audiences []string, audienceMatchPolicy api.AudienceMatchPolicyType, fldPath, audienceMatchPolicyFldPath *field.Path, structuredAuthnFeatureEnabled bool) field.ErrorList {
+func validateAudiences(audiences []string, audienceMatchPolicy api.AudienceMatchPolicyType, fldPath, audienceMatchPolicyFldPath *field.Path) field.ErrorList {
 	var allErrs field.ErrorList
 
 	if len(audiences) == 0 {
 		allErrs = append(allErrs, field.Required(fldPath, fmt.Sprintf(atLeastOneRequiredErrFmt, fldPath)))
 		return allErrs
-	}
-
-	if len(audiences) > 1 && !structuredAuthnFeatureEnabled {
-		allErrs = append(allErrs, field.Invalid(fldPath, audiences, "multiple audiences are not supported when StructuredAuthenticationConfiguration feature gate is disabled"))
 	}
 
 	seenAudiences := sets.NewString()
@@ -235,32 +228,7 @@ func validateCertificateAuthority(certificateAuthority string, fldPath *field.Pa
 	return allErrs
 }
 
-func validateEgressSelector(selectorType api.EgressSelectorType, fldPath *field.Path, structuredAuthnFeatureEnabled, structuredAuthnEgressSelectorFeatureEnabled bool) field.ErrorList {
-	var allErrs field.ErrorList
-
-	if len(selectorType) == 0 {
-		return allErrs
-	}
-
-	if !structuredAuthnFeatureEnabled {
-		allErrs = append(allErrs, field.Invalid(fldPath, selectorType, "egress selector is not supported when StructuredAuthenticationConfiguration feature gate is disabled"))
-	}
-
-	if !structuredAuthnEgressSelectorFeatureEnabled {
-		allErrs = append(allErrs, field.Invalid(fldPath, selectorType, "egress selector is not supported when StructuredAuthenticationConfigurationEgressSelector feature gate is disabled"))
-	}
-
-	switch selectorType {
-	case api.EgressSelectorControlPlane, api.EgressSelectorCluster:
-		// valid
-	default:
-		allErrs = append(allErrs, field.Invalid(fldPath, selectorType, "egress selector must be either controlplane or cluster"))
-	}
-
-	return allErrs
-}
-
-func validateClaimValidationRules(compiler authenticationcel.Compiler, state *validationState, rules []api.ClaimValidationRule, fldPath *field.Path, structuredAuthnFeatureEnabled bool) field.ErrorList {
+func validateClaimValidationRules(compiler authenticationcel.Compiler, state *validationState, rules []api.ClaimValidationRule, fldPath *field.Path) field.ErrorList {
 	var allErrs field.ErrorList
 
 	seenClaims := sets.NewString()
@@ -269,10 +237,6 @@ func validateClaimValidationRules(compiler authenticationcel.Compiler, state *va
 
 	for i, rule := range rules {
 		fldPath := fldPath.Index(i)
-
-		if len(rule.Expression) > 0 && !structuredAuthnFeatureEnabled {
-			allErrs = append(allErrs, field.Invalid(fldPath.Child("expression"), rule.Expression, "not supported when StructuredAuthenticationConfiguration feature gate is disabled"))
-		}
 
 		switch {
 		case len(rule.Claim) > 0 && len(rule.Expression) > 0:
@@ -301,7 +265,6 @@ func validateClaimValidationRules(compiler authenticationcel.Compiler, state *va
 				Expression: rule.Expression,
 				Message:    rule.Message,
 			}, fldPath.Child("expression"))
-
 			if err != nil {
 				allErrs = append(allErrs, err)
 				continue
@@ -312,7 +275,7 @@ func validateClaimValidationRules(compiler authenticationcel.Compiler, state *va
 		}
 	}
 
-	if structuredAuthnFeatureEnabled && len(compilationResults) > 0 {
+	if len(compilationResults) > 0 {
 		state.mapper.ClaimValidationRules = authenticationcel.NewClaimsMapper(compilationResults)
 		state.usesEmailVerifiedClaim = state.usesEmailVerifiedClaim || anyUsesEmailVerifiedClaim(compilationResults)
 	}
@@ -320,28 +283,13 @@ func validateClaimValidationRules(compiler authenticationcel.Compiler, state *va
 	return allErrs
 }
 
-func validateClaimMappings(compiler authenticationcel.Compiler, state *validationState, m api.ClaimMappings, fldPath *field.Path, structuredAuthnFeatureEnabled bool) field.ErrorList {
+func validateClaimMappings(compiler authenticationcel.Compiler, state *validationState, m api.ClaimMappings, fldPath *field.Path) field.ErrorList {
 	var allErrs field.ErrorList
-
-	if !structuredAuthnFeatureEnabled {
-		if len(m.Username.Expression) > 0 {
-			allErrs = append(allErrs, field.Invalid(fldPath.Child("username").Child("expression"), m.Username.Expression, "not supported when StructuredAuthenticationConfiguration feature gate is disabled"))
-		}
-		if len(m.Groups.Expression) > 0 {
-			allErrs = append(allErrs, field.Invalid(fldPath.Child("groups").Child("expression"), m.Groups.Expression, "not supported when StructuredAuthenticationConfiguration feature gate is disabled"))
-		}
-		if len(m.UID.Claim) > 0 || len(m.UID.Expression) > 0 {
-			allErrs = append(allErrs, field.Invalid(fldPath.Child("uid"), "", "claim mapping is not supported when StructuredAuthenticationConfiguration feature gate is disabled"))
-		}
-		if len(m.Extra) > 0 {
-			allErrs = append(allErrs, field.Invalid(fldPath.Child("extra"), "", "claim mapping is not supported when StructuredAuthenticationConfiguration feature gate is disabled"))
-		}
-	}
 
 	compilationResult, err := validatePrefixClaimOrExpression(compiler, m.Username, fldPath.Child("username"), true)
 	if err != nil {
 		allErrs = append(allErrs, err...)
-	} else if compilationResult != nil && structuredAuthnFeatureEnabled {
+	} else if compilationResult != nil {
 		state.usesEmailClaim = state.usesEmailClaim || usesEmailClaim(compilationResult.AST)
 		state.usesEmailVerifiedClaim = state.usesEmailVerifiedClaim || usesEmailVerifiedClaim(compilationResult.AST)
 		state.mapper.Username = authenticationcel.NewClaimsMapper([]authenticationcel.CompilationResult{*compilationResult})
@@ -350,7 +298,7 @@ func validateClaimMappings(compiler authenticationcel.Compiler, state *validatio
 	compilationResult, err = validatePrefixClaimOrExpression(compiler, m.Groups, fldPath.Child("groups"), false)
 	if err != nil {
 		allErrs = append(allErrs, err...)
-	} else if compilationResult != nil && structuredAuthnFeatureEnabled {
+	} else if compilationResult != nil {
 		state.mapper.Groups = authenticationcel.NewClaimsMapper([]authenticationcel.CompilationResult{*compilationResult})
 	}
 
@@ -364,7 +312,7 @@ func validateClaimMappings(compiler authenticationcel.Compiler, state *validatio
 
 		if err != nil {
 			allErrs = append(allErrs, err)
-		} else if structuredAuthnFeatureEnabled && compilationResult != nil {
+		} else if compilationResult != nil {
 			state.mapper.UID = authenticationcel.NewClaimsMapper([]authenticationcel.CompilationResult{*compilationResult})
 		}
 	}
@@ -402,7 +350,6 @@ func validateClaimMappings(compiler authenticationcel.Compiler, state *validatio
 			Key:        mapping.Key,
 			Expression: mapping.ValueExpression,
 		}, fldPath.Child("valueExpression"))
-
 		if err != nil {
 			allErrs = append(allErrs, err)
 			continue
@@ -413,12 +360,12 @@ func validateClaimMappings(compiler authenticationcel.Compiler, state *validatio
 		}
 	}
 
-	if structuredAuthnFeatureEnabled && len(extraCompilationResults) > 0 {
+	if len(extraCompilationResults) > 0 {
 		state.mapper.Extra = authenticationcel.NewClaimsMapper(extraCompilationResults)
 		state.usesEmailVerifiedClaim = state.usesEmailVerifiedClaim || anyUsesEmailVerifiedClaim(extraCompilationResults)
 	}
 
-	if structuredAuthnFeatureEnabled && state.usesEmailClaim && !state.usesEmailVerifiedClaim {
+	if state.usesEmailClaim && !state.usesEmailVerifiedClaim {
 		allErrs = append(allErrs, field.Invalid(fldPath.Child("username", "expression"), m.Username.Expression,
 			"claims.email_verified must be used in claimMappings.username.expression or claimMappings.extra[*].valueExpression or claimValidationRules[*].expression when claims.email is used in claimMappings.username.expression"))
 	}
@@ -567,7 +514,6 @@ func validatePrefixClaimOrExpression(compiler authenticationcel.Compiler, mappin
 		compilationResult, err = compileClaimsCELExpression(compiler, &authenticationcel.ClaimMappingExpression{
 			Expression: mapping.Expression,
 		}, fldPath.Child("expression"))
-
 		if err != nil {
 			allErrs = append(allErrs, err)
 		}
@@ -581,13 +527,9 @@ func validatePrefixClaimOrExpression(compiler authenticationcel.Compiler, mappin
 	return compilationResult, allErrs
 }
 
-func validateUserValidationRules(compiler authenticationcel.Compiler, state *validationState, rules []api.UserValidationRule, fldPath *field.Path, structuredAuthnFeatureEnabled bool) field.ErrorList {
+func validateUserValidationRules(compiler authenticationcel.Compiler, state *validationState, rules []api.UserValidationRule, fldPath *field.Path) field.ErrorList {
 	var allErrs field.ErrorList
 	var compilationResults []authenticationcel.CompilationResult
-
-	if len(rules) > 0 && !structuredAuthnFeatureEnabled {
-		allErrs = append(allErrs, field.Invalid(fldPath, "", "user validation rules are not supported when StructuredAuthenticationConfiguration feature gate is disabled"))
-	}
 
 	seenExpressions := sets.NewString()
 	for i, rule := range rules {
@@ -608,7 +550,6 @@ func validateUserValidationRules(compiler authenticationcel.Compiler, state *val
 			Expression: rule.Expression,
 			Message:    rule.Message,
 		}, fldPath.Child("expression"))
-
 		if err != nil {
 			allErrs = append(allErrs, err)
 			continue
@@ -619,7 +560,7 @@ func validateUserValidationRules(compiler authenticationcel.Compiler, state *val
 		}
 	}
 
-	if structuredAuthnFeatureEnabled && len(compilationResults) > 0 {
+	if len(compilationResults) > 0 {
 		state.mapper.UserValidationRules = authenticationcel.NewUserMapper(compilationResults)
 	}
 
@@ -666,4 +607,134 @@ func convertCELErrorToValidationError(fldPath *field.Path, expression string, er
 		}
 	}
 	return field.InternalError(fldPath, fmt.Errorf("error is not cel error: %w", err))
+}
+
+// MODIFICATION: Validation functions for validating externalClaimsSources
+func validateExternalClaimsSources(compiler authenticationcel.Compiler, externalClaimsSources []api.ExternalClaimsSource, fldPath *field.Path) field.ErrorList {
+	allErrs := field.ErrorList{}
+
+	// TODO: Determine whether or not 5 is reasonable, too little, or too many external claim sources.
+	if len(externalClaimsSources) > 5 {
+		allErrs = append(allErrs, field.TooMany(fldPath, len(externalClaimsSources), 5))
+	}
+
+	for i, source := range externalClaimsSources {
+		allErrs = append(allErrs, validateExternalClaimsSource(compiler, source, fldPath.Index(i))...)
+	}
+
+	return allErrs
+}
+
+func validateExternalClaimsSource(compiler authenticationcel.Compiler, source api.ExternalClaimsSource, path *field.Path) field.ErrorList {
+	allErrs := field.ErrorList{}
+
+	allErrs = append(allErrs, validateExternalClaimsSourceAuthentication(source.Authentication, path.Child("authentication"))...)
+	allErrs = append(allErrs, validateExternalClaimsSourceTLS(compiler, source.TLS, path.Child("tls"))...)
+	allErrs = append(allErrs, validateExternalClaimsSourceMappings(compiler, source.Mappings, path.Child("mappings"))...)
+	allErrs = append(allErrs, validateExternalClaimsSourceConditions(compiler, source.Conditions, path.Child("conditions"))...)
+
+	return allErrs
+}
+
+func validateExternalClaimsSourceConditions(compiler authenticationcel.Compiler, externalSourceConditions []api.ExternalSourceCondition, path *field.Path) field.ErrorList {
+	allErrs := field.ErrorList{}
+	
+	for i, condition := range externalSourceConditions {
+		allErrs = append(allErrs, validateExternalSourceCondition(compiler, condition, path.Index(i))...)
+	}
+
+	return allErrs
+}
+
+func validateExternalSourceCondition(compiler authenticationcel.Compiler, condition api.ExternalSourceCondition, path *field.Path) field.ErrorList {
+	if len(condition.Expression) == 0 {
+		return field.ErrorList{field.Required(path.Child("expression"), "expression is required")}
+	}
+
+	_, err := compiler.CompileClaimsExpression(&authenticationcel.ExternalSourceMappingExpression{
+		Expression: condition.Expression,
+	})
+	if err != nil {
+		return field.ErrorList{field.Invalid(path.Child("expression"), condition.Expression, fmt.Sprintf("error compiling expression: %v", err))}
+	}
+
+	return nil
+
+}
+
+func validateExternalClaimsSourceMappings(compiler authenticationcel.Compiler, sourcedClaimMappings []api.SourcedClaimMapping, path *field.Path) field.ErrorList {
+	allErrs := field.ErrorList{}
+
+	for i, mapping := range sourcedClaimMappings {
+		allErrs = append(allErrs, validateExternalClaimsSourceMapping(compiler, mapping, path.Index(i))...)
+	}
+
+	return allErrs
+}
+
+func validateExternalClaimsSourceMapping(compiler authenticationcel.Compiler, sourcedClaimMapping api.SourcedClaimMapping, path *field.Path) field.ErrorList {
+	allErrs := field.ErrorList{}
+
+	allErrs = append(allErrs, validateExternalClaimsSourceMappingName(sourcedClaimMapping.Name, path.Child("name"))...)
+	allErrs = append(allErrs, validateExternalClaimsSourceMappingExpression(compiler, sourcedClaimMapping.Expression, path.Child("expression"))...)
+
+	return allErrs
+}
+
+func validateExternalClaimsSourceMappingExpression(compiler authenticationcel.Compiler, expression string, path *field.Path) field.ErrorList {
+	if len(expression) == 0 {
+		return field.ErrorList{field.Required(path, "expression is required")}
+	}
+
+	_, err := compiler.CompileExternalSourceExpression(&authenticationcel.ExternalSourceMappingExpression{
+		Expression: expression,
+	})
+	if err != nil {
+		return field.ErrorList{field.Invalid(path, expression, fmt.Sprintf("error compiling expression: %v", err))}
+	}
+
+	return nil
+}
+
+var nameRegex = regexp.MustCompile("^([a-z_])+$")
+
+func validateExternalClaimsSourceMappingName(name string, path *field.Path) field.ErrorList {
+	if len(name) == 0 {
+		return field.ErrorList{field.Required(path, "name is required")}
+	}
+
+	if !nameRegex.MatchString(name) {
+		return field.ErrorList{field.Invalid(path, name, "name must consist of only lowercase alpha characters and underscores ('_').")}
+	}
+
+	if len(name) > 256 {
+		return field.ErrorList{field.TooLong(path, name, 256)}
+	}
+
+	return nil
+}
+
+func validateExternalClaimsSourceTLS(compiler authenticationcel.Compiler, tls *api.TLS, path *field.Path) field.ErrorList {
+	if tls == nil {
+		return nil
+	}
+
+	if len(tls.CA) == 0 {
+		return field.ErrorList{field.Required(path.Child("ca"), "ca must not be empty and must be a valid PEM-encoded certificate")}
+	}
+
+	return validateCertificateAuthority(tls.CA, path.Child("ca"))
+}
+
+func validateExternalClaimsSourceAuthentication(authentication *api.Authentication, path *field.Path) field.ErrorList {
+	if authentication == nil {
+		return field.ErrorList{field.Required(path, "authentication is required")}
+	}
+
+	allowedTypes := sets.New(api.AuthenticationTypeRequestProvidedToken)
+	if !allowedTypes.Has(authentication.Type) {
+		return field.ErrorList{field.Invalid(path.Child("type"), authentication.Type, fmt.Sprintf("type must be one of %s", api.AuthenticationTypeRequestProvidedToken))}
+	}
+
+	return nil
 }

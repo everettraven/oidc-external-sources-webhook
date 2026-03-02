@@ -1,2 +1,4 @@
-*.pem
-keycloak-config.yaml
+bin
+certs
+cfg
+cover.out

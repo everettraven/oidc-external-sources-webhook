@@ -22,8 +22,6 @@ type Authenticate struct {
 }
 
 func (a *Authenticate) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
-	log.Println("(authenticate.ServeHTTP) request recieved")
-
 	requestedTokenReviewBytes, err := io.ReadAll(req.Body)
 	if err != nil {
 		log.Printf("error reading request body: %v\n", err)
@@ -46,12 +44,17 @@ func (a *Authenticate) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		},
 	}
 
-	resp, _, err := a.authenticator.AuthenticateToken(req.Context(), requestedTokenReview.Spec.Token)
+	resp, authenticated, err := a.authenticator.AuthenticateToken(req.Context(), requestedTokenReview.Spec.Token)
 	if err != nil {
 		log.Println(err)
 		responseTokenReview.Status = authenticationv1.TokenReviewStatus{
 			Authenticated: false,
 			Error:         err.Error(),
+		}
+		rw.WriteHeader(http.StatusUnauthorized)
+	} else if !authenticated {
+		responseTokenReview.Status = authenticationv1.TokenReviewStatus{
+			Authenticated: false,
 		}
 		rw.WriteHeader(http.StatusUnauthorized)
 	} else {

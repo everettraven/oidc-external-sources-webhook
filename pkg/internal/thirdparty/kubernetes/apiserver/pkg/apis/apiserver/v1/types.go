@@ -77,6 +77,16 @@ type JWTAuthenticator struct {
 	// The validation rules are logically ANDed together and must all return true for the validation to pass.
 	// +optional
 	UserValidationRules []UserValidationRule `json:"userValidationRules,omitempty"`
+
+	// MODIFICATION: Add a field for external claims sourcing configuration
+
+	// externalClaimsSource contains configuration options for sourcing claims
+	// from sources external to the token.
+	// This allows for claims not present in the token, but available from some
+	// other endpoint on the issuer to be fetched and used during the identity
+	// mapping process.
+	// +optional
+	ExternalClaimsSources []ExternalClaimsSource `json:"externalClaimsSources,omitempty"`
 }
 
 // Issuer provides the configuration for an external provider's specific settings.
@@ -146,18 +156,6 @@ type Issuer struct {
 	//   example: claimValidationRule[].expression: 'sets.equivalent(claims.aud, ["bar", "foo", "baz"])' to require an exact match.
 	// +optional
 	AudienceMatchPolicy AudienceMatchPolicyType `json:"audienceMatchPolicy,omitempty"`
-
-	// egressSelectorType is an indicator of which egress selection should be used for sending all traffic related
-	// to this issuer (discovery, JWKS, distributed claims, etc).  If unspecified, no custom dialer is used.
-	// When specified, the valid choices are "controlplane" and "cluster".  These correspond to the associated
-	// values in the --egress-selector-config-file.
-	//
-	// - controlplane: for traffic intended to go to the control plane.
-	//
-	// - cluster: for traffic intended to go to the system being managed by Kubernetes.
-	//
-	// +optional
-	EgressSelectorType EgressSelectorType `json:"egressSelectorType,omitempty"`
 }
 
 // AudienceMatchPolicyType is a set of valid values for issuer.audienceMatchPolicy
@@ -167,17 +165,6 @@ type AudienceMatchPolicyType string
 const (
 	// MatchAny means the "aud" claim in the presented JWT must match at least one of the entries in the "audiences" field.
 	AudienceMatchPolicyMatchAny AudienceMatchPolicyType = "MatchAny"
-)
-
-// EgressSelectorType is an indicator of which egress selection should be used for sending traffic.
-type EgressSelectorType string
-
-const (
-	// EgressSelectorControlPlane is the EgressSelectorType for traffic intended to go to the control plane.
-	EgressSelectorControlPlane EgressSelectorType = "controlplane"
-
-	// EgressSelectorCluster is the EgressSelectorType for traffic intended to go to the system being managed by Kubernetes.
-	EgressSelectorCluster EgressSelectorType = "cluster"
 )
 
 // ClaimValidationRule provides the configuration for a single claim validation rule.
@@ -376,3 +363,102 @@ type UserValidationRule struct {
 	Message string `json:"message,omitempty"`
 }
 
+// MODIFICATIONS: New types for external claims sourcing.
+
+type ExternalClaimsSource struct {
+	// authentication is a required field that configures how the
+	// kube-apiserver authenticates with an external claims source.
+	// +required
+	Authentication *Authentication `json:"authentication,omitempty"`
+	// tls is an optional field that configures the http client TLS
+	// settings when fetching external claims from this source.
+	// +optional
+	TLS *TLS `json:"tls,omitempty"`
+	// url is a required configuration of the URL
+	// for which the external claims are located.
+	// +required
+	URL *SourceURL `json:"url,omitempty"`
+	// mappings is a required list of the claim
+	// and response handling expression pairs
+	// that produces the claims from the external source.
+	// +required
+	Mappings []SourcedClaimMapping `json:"mappings,omitempty"`
+	// conditions is an optional list of conditions in
+	// which claims should attempt to be fetched from this
+	// external source.
+	// When omitted, claims are always attempted to be fetched
+	// from this external source.
+	// When specified, all conditions must evaluate to 'true'
+	// before claims are attempted to be fetched from this external source.
+	// +optional
+	Conditions []ExternalSourceCondition `json:"conditions,omitempty"`
+}
+
+type TLS struct {
+	// ca is a required field that configures the certificate authority
+	// used to validate TLS connections with the external claims source.
+	// Must not be empty and must be a valid PEM-encoded certificate.
+	// +required
+	CA string `json:"ca,omitempty"`
+}
+
+type Authentication struct {
+	// type is a required field that sets the type of
+	// authentication method used by the authenticator
+	// when fetching external claims.
+	//
+	// Allowed values are 'RequestProvidedToken'.
+	//
+	// When set to 'RequestProvidedToken', the authenticator will
+	// use the token provided to the kube-apiserver as part of the
+	// request to authenticate with the external claims source.
+	// +required
+	Type AuthenticationType `json:"type,omitempty"`
+}
+
+type AuthenticationType string
+
+const (
+	AuthenticationTypeRequestProvidedToken AuthenticationType = "RequestProvidedToken"
+)
+
+type SourceURL struct {
+	// hostname is a required hostname for which the external claims are located.
+	// +required
+	Hostname string `json:"hostname,omitempty"`
+	// pathExpression is a required CEL expression that returns a list
+	// of string values used to construct the URL path.
+	// Claims from the token used for the request to the kube-apiserver
+	// are made available via the `claims` variable.
+	// +required
+	PathExpression string `json:"pathExpression,omitempty"`
+}
+
+type SourcedClaimMapping struct {
+	// name is a required name of the claim that
+	// will be produced and made available during
+	// the claim-to-identity mapping process.
+	// +required
+	Name string `json:"name,omitempty"`
+
+	// expression is a required CEL expression that
+	// will produce a value to be assigned to the claim.
+	// The full response body from the request to the
+	// external claim source is provided via the
+	// `response` variable.
+	// +required
+	Expression string `json:"expression,omitempty"`
+}
+
+type ExternalSourceCondition struct {
+	// expression is a required CEL expression that
+	// is used to determine whether or not an external
+	// source should be used to fetch external claims.
+	// The expression must return a boolean value,
+	// where true means that the source should be consulted
+	// and false means that it should not.
+	// Claims from the token used for the request to the kube-apiserver
+	// are made available via the `claims` variable.
+	// +required
+	Expression string `json:"expression,omitempty"`
+}
