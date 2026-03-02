@@ -47,6 +47,7 @@ func Convert_v1_JWTAuthenticator_To_apiserver_JWTAuthenticator(in *JWTAuthentica
 		if err != nil {
 			return fmt.Errorf("converting external claims source: %w", err)
 		}
+
 		outECS = append(outECS, *outEC)
 	}
 
@@ -100,15 +101,16 @@ func Convert_v1_ExternalClaimsSource_To_apiserver_ExternalClaimsSource(in *Exter
 	if out == nil {
 		out = &apiserver.ExternalClaimsSource{}
 	}
-	if err := Convert_v1_Authentication_To_apiserver_Authentication(in.Authentication, out.Authentication); err != nil {
+
+	if err := Convert_v1_Authentication_To_apiserver_Authentication(in.Authentication, &out.Authentication); err != nil {
 		return err
 	}
 
-	if err := Convert_v1_TLS_To_apiserver_TLS(in.TLS, out.TLS); err != nil {
+	if err := Convert_v1_TLS_To_apiserver_TLS(in.TLS, &out.TLS); err != nil {
 		return err
 	}
 
-	if err := Convert_v1_SourceURL_To_apiserver_SourceURL(in.URL, out.URL); err != nil {
+	if err := Convert_v1_SourceURL_To_apiserver_SourceURL(in.URL, &out.URL); err != nil {
 		return err
 	}
 
@@ -118,37 +120,39 @@ func Convert_v1_ExternalClaimsSource_To_apiserver_ExternalClaimsSource(in *Exter
 	return nil
 }
 
-func Convert_v1_SourceURL_To_apiserver_SourceURL(in *SourceURL, out *apiserver.SourceURL) error {
-	if out == nil {
-		out = &apiserver.SourceURL{}
-	}
-
+func Convert_v1_SourceURL_To_apiserver_SourceURL(in *SourceURL, out **apiserver.SourceURL) error {
 	if in == nil {
 		return nil
 	}
 
-	out.Hostname = in.Hostname
-	out.PathExpression = in.PathExpression
+	outTemp := &apiserver.SourceURL{}
+
+	outTemp.Hostname = in.Hostname
+	outTemp.PathExpression = in.PathExpression
+	*out = outTemp
 	return nil
 }
 
-func Convert_v1_Authentication_To_apiserver_Authentication(in *Authentication, out *apiserver.Authentication) error {
-	if out == nil {
-		out = &apiserver.Authentication{}
-	}
+func Convert_v1_Authentication_To_apiserver_Authentication(in *Authentication, out **apiserver.Authentication) error {
+	outTemp := &apiserver.Authentication{}
 
 	// defaulting?
 	if in == nil {
-		out.Type = apiserver.AuthenticationTypeRequestProvidedToken
+		outTemp.Type = apiserver.AuthenticationTypeRequestProvidedToken
 		return nil
 	}
 
-	out.Type = apiserver.AuthenticationType(in.Type)
+	outTemp.Type = apiserver.AuthenticationType(in.Type)
+	*out = outTemp
 	return nil
 }
 
-func Convert_v1_TLS_To_apiserver_TLS(in *TLS, out *apiserver.TLS) error {
-	out.CA = in.CA
+func Convert_v1_TLS_To_apiserver_TLS(in *TLS, out **apiserver.TLS) error {
+	if in == nil {
+		return nil
+	}
+	outTemp := &apiserver.TLS{}
+	outTemp.CA = in.CA
+	*out = outTemp
 	return nil
 }
-

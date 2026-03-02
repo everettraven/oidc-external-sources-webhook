@@ -50,11 +50,12 @@ func NewExternalClaimsResolver(compiler authenticationcel.Compiler, externalClai
 	}, nil
 }
 
-func httpClientForTLSConfig(tlsCfg apiserver.TLS) (*http.Client, error) {
+func httpClientForTLSConfig(tlsCfg *apiserver.TLS) (*http.Client, error) {
 	client := &http.Client{
 		Timeout: externalSourceRequestTimeout,
 	}
-	if len(tlsCfg.CA) == 0 {
+
+	if tlsCfg == nil || len(tlsCfg.CA) == 0 {
 		return client, nil
 	}
 
@@ -90,7 +91,7 @@ func httpClientForTLSConfig(tlsCfg apiserver.TLS) (*http.Client, error) {
 	return client, nil
 }
 
-func buildExternalSourceCELMapper(compiler authenticationcel.Compiler, sourceURL apiserver.SourceURL, sourceMappings []apiserver.SourcedClaimMapping, sourceConditions []apiserver.ExternalSourceCondition) (*authenticationcel.ExternalSourceCELMapper, error) {
+func buildExternalSourceCELMapper(compiler authenticationcel.Compiler, sourceURL *apiserver.SourceURL, sourceMappings []apiserver.SourcedClaimMapping, sourceConditions []apiserver.ExternalSourceCondition) (*authenticationcel.ExternalSourceCELMapper, error) {
 	urlMapper, err := buildURLMapperFromSourceURL(compiler, sourceURL)
 	if err != nil {
 		return nil, fmt.Errorf("building external claims url mapper: %w", err)
@@ -130,7 +131,11 @@ func buildExternalSourceConditionMapperFromConditions(compiler authenticationcel
 	return authenticationcel.NewClaimsMapper(compilationResults), nil
 }
 
-func buildURLMapperFromSourceURL(compiler authenticationcel.Compiler, sourceURL apiserver.SourceURL) (authenticationcel.ClaimsMapper, error) {
+func buildURLMapperFromSourceURL(compiler authenticationcel.Compiler, sourceURL *apiserver.SourceURL) (authenticationcel.ClaimsMapper, error) {
+	if sourceURL == nil {
+		return nil, errors.New("sourceURL is nil")
+	}
+
 	pathExpressionAccessor := &authenticationcel.ExternalSourceURLExpression{
 		Hostname:       sourceURL.Hostname,
 		PathExpression: sourceURL.PathExpression,
@@ -161,7 +166,11 @@ func buildExternalClaimsMapperFromSourcedClaimMappings(compiler authenticationce
 	return authenticationcel.NewExternalClaimsMapper(compilationResults), nil
 }
 
-func clientAuthenticationForAuthentication(authn apiserver.Authentication) clientAuthentication {
+func clientAuthenticationForAuthentication(authn *apiserver.Authentication) clientAuthentication {
+	if authn == nil {
+		return clientAuthentication{}
+	}
+
 	switch authn.Type {
 	case apiserver.AuthenticationTypeRequestProvidedToken:
 		return clientAuthentication{

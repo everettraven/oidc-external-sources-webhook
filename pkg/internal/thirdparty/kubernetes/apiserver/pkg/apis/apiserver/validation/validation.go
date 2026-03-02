@@ -627,7 +627,7 @@ func validateExternalClaimsSources(compiler authenticationcel.Compiler, external
 func validateExternalClaimsSource(compiler authenticationcel.Compiler, source api.ExternalClaimsSource, path *field.Path) field.ErrorList {
 	allErrs := field.ErrorList{}
 
-	allErrs = append(allErrs, validateExternalClaimsSourceAuthentication(compiler, source.Authentication, path.Child("authentication"))...)
+	allErrs = append(allErrs, validateExternalClaimsSourceAuthentication(source.Authentication, path.Child("authentication"))...)
 	allErrs = append(allErrs, validateExternalClaimsSourceTLS(compiler, source.TLS, path.Child("tls"))...)
 	allErrs = append(allErrs, validateExternalClaimsSourceMappings(compiler, source.Mappings, path.Child("mappings"))...)
 	allErrs = append(allErrs, validateExternalClaimsSourceConditions(compiler, source.Conditions, path.Child("conditions"))...)
@@ -650,7 +650,7 @@ func validateExternalSourceCondition(compiler authenticationcel.Compiler, condit
 		return field.ErrorList{field.Required(path.Child("expression"), "expression is required")}
 	}
 
-	_, err := compiler.CompileExternalSourceExpression(&authenticationcel.ExternalSourceMappingExpression{
+	_, err := compiler.CompileClaimsExpression(&authenticationcel.ExternalSourceMappingExpression{
 		Expression: condition.Expression,
 	})
 	if err != nil {
@@ -725,7 +725,7 @@ func validateExternalClaimsSourceTLS(compiler authenticationcel.Compiler, tls *a
 	return validateCertificateAuthority(tls.CA, path.Child("ca"))
 }
 
-func validateExternalClaimsSourceAuthentication(compiler authenticationcel.Compiler, authentication *api.Authentication, path *field.Path) field.ErrorList {
+func validateExternalClaimsSourceAuthentication(authentication *api.Authentication, path *field.Path) field.ErrorList {
 	if authentication == nil {
 		return field.ErrorList{field.Required(path, "authentication is required")}
 	}
