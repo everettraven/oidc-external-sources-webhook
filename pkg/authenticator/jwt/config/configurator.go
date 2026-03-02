@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/everettraven/oidc-external-sources-webhook/pkg/internal/thirdparty/kubernetes/apiserver/pkg/apis/apiserver"
@@ -23,7 +22,9 @@ import (
 )
 
 func NewConfigurator() *Configurator {
-	return &Configurator{}
+	return &Configurator{
+		fs: &filesystem.DefaultFs{},
+	}
 }
 
 type authenticatorWithCancel struct {
@@ -34,9 +35,14 @@ type authenticatorWithCancel struct {
 type Configurator struct {
 	configFile              string
 	authenticatorWithCancel *authenticatorWithCancel
+	fs            filesystem.Filesystem
 }
 
 func (c *Configurator) TokenAuthenticator() authenticator.Token {
+	if c.authenticatorWithCancel == nil {
+		return nil
+	}
+
 	return c.authenticatorWithCancel.authenticator
 }
 
@@ -49,7 +55,7 @@ func (c *Configurator) Validate() error {
 		return errors.New("configuration file must be specified")
 	}
 
-	authnConfig, err := AuthenticationConfigurationFromConfigurationFile(c.configFile)
+	authnConfig, err := AuthenticationConfigurationFromConfigurationFile(c.fs, c.configFile)
 	if err != nil {
 		return fmt.Errorf("reading authentication configuration from config file: %w", err)
 	}
@@ -87,7 +93,7 @@ func (c *Configurator) handleConfigChange(ctx context.Context) error {
 		return fmt.Errorf("validating configuration: %w", err)
 	}
 
-	authnCfg, err := AuthenticationConfigurationFromConfigurationFile(c.configFile)
+	authnCfg, err := AuthenticationConfigurationFromConfigurationFile(c.fs, c.configFile)
 	if err != nil {
 		return fmt.Errorf("loading authentication configuration from configuration file: %w", err)
 	}
@@ -106,18 +112,18 @@ func (c *Configurator) handleConfigChange(ctx context.Context) error {
 
 	c.authenticatorWithCancel = &authenticatorWithCancel{
 		authenticator: tokenAuthenticator,
-		cancel: cancel,
+		cancel:        cancel,
 	}
 
 	return nil
 }
 
-func AuthenticationConfigurationFromConfigurationFile(cfgPath string) (*apiserver.AuthenticationConfiguration, error) {
+func AuthenticationConfigurationFromConfigurationFile(fs filesystem.Filesystem, cfgPath string) (*apiserver.AuthenticationConfiguration, error) {
 	if cfgPath == "" {
 		return nil, errors.New("configuration file must be specified")
 	}
 
-	configBytes, err := os.ReadFile(cfgPath)
+	configBytes, err := fs.ReadFile(cfgPath)
 	if err != nil {
 		return nil, fmt.Errorf("reading configuration file: %w", err)
 	}
