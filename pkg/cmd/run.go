@@ -18,7 +18,7 @@ func NewRunCommand() *cobra.Command {
 			go func() {
 				err := authn.Run(cmd.Context())
 				if err != nil {
-					log.Fatalf("jwt.Run error", err)
+					log.Fatalf("jwt.Run error: %v", err)
 				}
 			}()
 
